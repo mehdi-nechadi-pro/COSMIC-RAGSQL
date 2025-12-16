@@ -1,0 +1,10 @@
+[theme]
+base="dark"
+primaryColor="#00FF00"  # Un vert terminal pour le bouton d'action, très sobre
+backgroundColor="#0E1117" # Fond très sombre
+secondaryBackgroundColor="#161A25" # Fond des zones de saisie
+textColor="#FAFAFA" # Texte quasi blanc
+font="monospace" # Police type "code" pour le look terminal
+
+[ui]
+hideTopBar = true # Cache la barre rouge en haut

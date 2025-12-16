@@ -1,0 +1,14 @@
+PROJET LLM
+
+- Recupéré en brut les caldwell (Objets IC/NGC les + populaires) via OpenGC et un dictionnaire en brut 
+- Récupéré les Messier via OpenGC 
+
+- Image Messier via : SDES (http://messier.seds.org/Jpg/m{number}.jpg)
+- Images IC/NGC via API wikipedia 
+
+- Base Celestial(nom,type,constellation,ra,dec,magnitude,url)
+
+- Remplissage de la base
+
+- Gemini 1.5 plutot que gpt4-o parce que c'est - cher
+
