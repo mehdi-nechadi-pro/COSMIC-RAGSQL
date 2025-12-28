@@ -63,6 +63,9 @@ def initialize_agent():
         except Exception as e: return f"Error inspecting values: {e}"
         
 
+    # A CHANGER je veux classer l'info : infos générales -> tu réponds,  et demande d'observation -> tu appel le check_visibility qui va transformer la ville en Coordonnée (via une fonction qui utilisera la lib geopy) et faire le calcul de contrainte ra/dec min et max
+    # cette contrainte est envoyé 
+
     prompt = f"""You are an space sql agent, your goal is to give useful enrich informations 
 to the user based on your knowledge and the {db.dialect} query you can execute on the database.BEFORE writing ANY SQL query:
 
