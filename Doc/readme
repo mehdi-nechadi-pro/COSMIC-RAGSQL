@@ -1,14 +1,20 @@
 PROJET LLM
 
-- Recupéré en brut les caldwell (Objets IC/NGC les + populaires) via OpenGC et un dictionnaire en brut 
-- Récupéré les Messier via OpenGC 
-
-- Image Messier via : SDES (http://messier.seds.org/Jpg/m{number}.jpg)
-- Images IC/NGC via API wikipedia 
-
 - Base Celestial(nom,type,constellation,ra,dec,magnitude,url)
 
-- Remplissage de la base
+- Remplissage de la base 
+    - M1-110 / NGC_IC du catalogue Caldwell -> JSON pour correspondance (CX -> IC/NGC Y) et récup via openNGC 
+    - constellation name traduction -> Dictionnaire correspondance à la main 
+    - ra/dec, magnitude, type -> https://github.com/mattiaverga/PyOngc (OPENGC)
+    - magnitude apparente
+    - url = api wikipedia
 
-- Gemini 1.5 plutot que gpt4-o parce que c'est - cher
+- Gemini 2.5 lite via AI studio (Google)
 
+python -m streamlit run app.py
+
+- Vérification calcul de la base de données pour être sur (RA/DEC) : normalement c'est bon !! 
+- Astropy : Quasi bon !
+- Test Prompt 
+- Embedding photo 
+- Renvoi carte observation en 2D simpliste 

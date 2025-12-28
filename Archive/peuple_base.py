@@ -5,20 +5,69 @@ import wikipedia
 import time
 import sqlite3
 import math
-from astroquery.simbad import Simbad
-from astroquery.vizier import Vizier
+import requests
+from typing import Optional
+import re
 
-con = sqlite3.connect("base.db")
-cur = con.cursor()
+def get_image_wikipedia(object_name: str, thumbnail_width: int = 1000) -> Optional[str]:
+    """
+    Récupère l'URL de l'image principale d'un objet via l'API Wikipédia (EN).
+    
+    Args:
+        object_name (str): Le nom de l'objet (ex: 'M42', 'NGC 224').
+        thumbnail_width (int): La largeur souhaitée en pixels (défaut: 1000px).
+        
+    Returns:
+        str: L'URL directe de l'image (JPG/PNG) ou None si introuvable.
+    """
+    
+    search_query = object_name.strip()
+    if search_query.upper().startswith("M") and search_query[1:].isdigit():
+        search_query = f"Messier {search_query[1:]}"
+    
+    url = "https://en.wikipedia.org/w/api.php"
+    
+    params = {
+        "action": "query",
+        "format": "json",
+        "prop": "pageimages",   
+        "pithumbsize": thumbnail_width,
+        "titles": search_query,
+        "redirects": 1,         
+        "formatversion": 2        
+    }
+    
+    headers = {
+        "User-Agent": "AstroSQLBot/1.0 (educational project; contact@univ.fr)"
+    }
 
-cur.execute("CREATE TABLE Celestial(name, type, constellation, ra, dec, magnitude, url)")
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        
+        if "query" in data and "pages" in data["query"]:
+            page = data["query"]["pages"][0]
+            
+            if "missing" not in page and "thumbnail" in page:
+                image_url = page["thumbnail"]["source"]
+                
+                if image_url.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                    return image_url
+                    
+    except requests.exceptions.RequestException as e:
+        print(f"⚠️ Erreur réseau pour {object_name}: {e}")
+    except Exception as e:
+        print(f"⚠️ Erreur inattendue pour {object_name}: {e}")
+
+    return None
 
 # Mapping officiel IAU (3 lettres -> Nom complet)
 iau_constellations = {
     "AND": "Andromeda", "ANT": "Antlia", "APS": "Apus", "AQR": "Aquarius",
     "AQL": "Aquila", "ARA": "Ara", "ARI": "Aries", "AUR": "Auriga",
-    "BOO": "Boötes", "CAE": "Caelum", "CAM": "Camelopardalis", "CNC": "Cancer",
-    "CVN": "Canes Venatici", "CMAR": "Canis Major", "CMIN": "Canis Minor", "CAP": "Capricornus",
+    "BOO": "Bootes", "CAE": "Caelum", "CAM": "Camelopardalis", "CNC": "Cancer",
+    "CVN": "Canes Venatici", "CMA": "Canis Major", "CMI": "Canis Minor", "CAP": "Capricornus",
     "CAR": "Carina", "CAS": "Cassiopeia", "CEN": "Centaurus", "CEP": "Cepheus",
     "CET": "Cetus", "CHA": "Chamaeleon", "CIR": "Circinus", "COL": "Columba",
     "COM": "Coma Berenices", "CRA": "Corona Australis", "CRB": "Corona Borealis", "CRV": "Corvus",
@@ -39,17 +88,10 @@ iau_constellations = {
     "VEL": "Vela", "VIR": "Virgo", "VOL": "Volans", "VUL": "Vulpecula"
 }
 
-# Fonction utilitaire
 def get_constellation_name(abbr):
     return iau_constellations.get(abbr.upper(), "Inconnue")
 
-def get_seds_messier_image(messier_id):
-    number = messier_id[1:] 
-    
-    url = f"http://messier.seds.org/Jpg/m{number}.jpg"
-    
-    return url
-
+#Load JSON
 def load_database(db_path):
     try:
         with open(db_path, 'r') as f:
@@ -60,10 +102,7 @@ def load_database(db_path):
         print(f"❌ ERREUR : Le fichier {db_path} est introuvable.")
         exit()
 
-caldwell_ngc = load_database("caldwell.json")
-caldwell_ngc_url = load_database("caldwell_data_complete.json")
-
-
+#Get best Magnitude (Bmag, Vmag, Jmag, Hmag, Kmag) -> On récupère en prio V (visuel) et a la limite B sinon le reste est infra
 def get_best_mag(mag_tuple):
     
     if len(mag_tuple) > 1 and mag_tuple[1] is not None:
@@ -71,10 +110,6 @@ def get_best_mag(mag_tuple):
 
     if len(mag_tuple) > 0 and mag_tuple[0] is not None:
         return mag_tuple[0]
-
-    for mag in mag_tuple:
-        if mag is not None:
-            return mag
 
     return None
 
@@ -92,28 +127,39 @@ def clean_from_radians(rad_tuple):
     
     return ra_deg, dec_deg
 
+################## MAIN ##################
+
+con = sqlite3.connect("base_fin.db")
+cur = con.cursor()
+
+cur.execute("CREATE TABLE Celestial(name, type, constellation, ra, dec, magnitude, url)")
+
+caldwell_ngc = load_database("caldwell.json")
+
 
 for i in range(1, 111):
     messier_name = f"M{i}"
     
     try:
         obj = Dso(messier_name)
-        
+     
+        obj_type = obj.type.replace(" ", "_")
+
+        constellation_IAU = obj.constellation
+        constellation = get_constellation_name(constellation_IAU)
+
         ra_final, dec_final = clean_from_radians(obj.rad_coords)
     
         magnitude = obj.magnitudes
-        obj_type = obj.type
-        constellation = obj.constellation
+        magnitude = get_best_mag(magnitude)
+        magnitude_sql = magnitude if magnitude is not None else "NULL"
 
-        magnitude = obj.magnitudes
-        obj_type = obj.type.replace(" ", "_")
-        url = get_seds_messier_image(messier_name)
-        mag = get_best_mag(magnitude)
-        valeur_sql = mag if mag is not None else "NULL"
+        url = get_image_wikipedia(messier_name)
 
-        print(f"✅ {messier_name}, {obj_type}, {get_constellation_name(constellation)}, {ra_final}, {dec_final}, {valeur_sql},{url}")
+        print(f"✅ {messier_name}, {obj_type}, {constellation}, {ra_final}, {dec_final}, {magnitude_sql},{url}")
 
-        cur.execute(f"""INSERT INTO Celestial VALUES ('{messier_name}', '{obj_type}', '{get_constellation_name(constellation)}', {ra_final}, {dec_final}, {valeur_sql}, '{url}')
+        cur.execute(f"""INSERT INTO Celestial VALUES 
+                ('{messier_name}', '{obj_type}', '{constellation}', {ra_final}, {dec_final}, {magnitude_sql}, '{url}')
         """)
         
     except Exception as e:
@@ -121,23 +167,31 @@ for i in range(1, 111):
 
 print("Catalogue IC/NGC")
 
-for caldwell_id, details in caldwell_ngc_url.items():
+for caldwell_id, NGC_IC_Correspondance in caldwell_ngc.items():
     try:
-        ngc_ic_id = details['scientific_name']
-        url = details['image_url']
+        ngc_ic_id = NGC_IC_Correspondance
+
         obj = Dso(ngc_ic_id)
-        ra_final, dec_final = clean_from_radians(obj.rad_coords)
-        constellation = obj.constellation
-        
-        magnitude = obj.magnitudes
+
         obj_type = obj.type.replace(" ", "_")
+        
+        constellation_IAU = obj.constellation
+        constellation = get_constellation_name(constellation_IAU)
 
-        mag = get_best_mag(magnitude)
-        valeur_sql = mag if mag is not None else "NULL"
+        ra_final, dec_final = clean_from_radians(obj.rad_coords)
 
-        print(f"✅ {ngc_ic_id}, {obj_type}, {get_constellation_name(constellation)}, {ra_final}, {dec_final}, {valeur_sql},{url}")
+        magnitude = obj.magnitudes
+        magnitude = get_best_mag(magnitude)
+        magnitude_sql = magnitude if magnitude is not None else "NULL"
 
-        cur.execute(f""" INSERT INTO Celestial VALUES ('{ngc_ic_id}', '{obj_type}', '{valeur_sql}', {ra_final}, {dec_final}, {valeur_sql}, '{url}')
+        name_wikipedia = propre = re.sub(r"(\D)(\d)", r"\1 \2", ngc_ic_id)
+    
+        url = get_image_wikipedia(name_wikipedia)
+
+        print(f"✅ {ngc_ic_id}, {obj_type}, {constellation}, {ra_final}, {dec_final}, {magnitude_sql},{url}")
+
+        cur.execute(f""" INSERT INTO Celestial VALUES 
+                ('{ngc_ic_id}', '{obj_type}', '{constellation}', {ra_final}, {dec_final}, {magnitude_sql}, '{url}')
         """)
     
     except Exception as e:
@@ -145,59 +199,3 @@ for caldwell_id, details in caldwell_ngc_url.items():
 
 
 con.commit()
-
-#NAME, TYPE, CONSTELLATIONS, RA, DEC, MAGNITUDE, URL
-
-# def get_wiki_image_safe(search_term):
-#     try:
-#         # On cherche la page précise "NGC 188"
-#         page = wikipedia.page(search_term, auto_suggest=False)
-        
-#         # On prend la première image qui est un JPG et pas un Logo
-#         for img in page.images:
-#             if img.lower().endswith('.jpg') and "logo" not in img.lower():
-#                 return img
-#         return None
-#     except:
-#         return None
-
-
-# print("📸 Début de la récupération des images NGC/IC...")
-
-# results = {}
-
-# for c_id, ngc_name in caldwell_ngc.items():
-    
-#     # On interroge Wikipédia avec le VRAI nom (NGC 188, pas C1)
-#     image_url = get_wiki_image_safe(ngc_name)
-    
-#     if image_url:
-#         print(f"✅ {c_id} ({ngc_name}) : Image trouvée !")
-#         results[c_id] = image_url
-#     else:
-#         print(f"⚠️ {c_id} ({ngc_name}) : Pas d'image trouvée.")
-#         results[c_id] = "PLACEHOLDER_URL" # Mettez une image par défaut
-    
-#     time.sleep(1) 
-
-# print(results)
-# final_data = {}
-
-# for c_id, url_image in results.items():
-    
-#     # On récupère le nom scientifique (NGC/IC) depuis ton dictionnaire de départ
-#     scientific_name = caldwell_ngc.get(c_id, "Inconnu")
-    
-#     # On crée la structure propre
-#     final_data[c_id] = {
-#         "scientific_name": scientific_name, # Ex: "NGC 188"
-#         "image_url": url_image              # Ex: "https://..."
-#     }
-
-# # Sauvegarde dans le JSON
-# with open("caldwell_data_complete.json", "w", encoding="utf-8") as f:
-#     json.dump(final_data, f, indent=4, ensure_ascii=False)
-
-# print("✅ Fichier 'caldwell_data_complete.json' généré ! Tu as tout dedans.")
-
-#print("Base de données consolidée prête !")
