@@ -15,7 +15,7 @@ import astropy.units as u
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
-con = sqlite3.connect("base_fin.db")
+con = sqlite3.connect("Celestial.db")
 cur = con.cursor()
 
 def getLocationByGeo(cityname):
@@ -53,34 +53,35 @@ def get_ra_dec_constraint(city: str, time_input=None) -> str:
 
     lst = observation_time.sidereal_time('mean', longitude=location.lon) # calcul du temps sidéral local (la valeur est l'ascension droite actuellement au zénith)
     lst_hours = lst.to_value(u.hourangle)
+    lst_deg = lst_hours * 15
     print("LST hours : ", lst_hours)
 
-    ra_min = (lst_hours - 6) % 24 # RA -> DIT SI L'OBJET EST SUR LA FACE VISIBLE OU CACHEE 
-    ra_max = (lst_hours + 6) % 24
+    ra_min_deg = (lst_hours - 90) % 360 # RA -> DIT SI L'OBJET EST SUR LA FACE VISIBLE OU CACHEE 
+    ra_max_deg = (lst_hours + 90) % 360 # On transforme direct en angle (90 degré c'est 6h)
     dec_min = lat - 90 # marge de 15 degrés pour la visibilité 
 
-    LST_current_meridian = float(round(lst_hours, 2))
-    RA_visible_start = float(round(ra_min, 2))
-    RA_visible_end = float(round(ra_max, 2))
+    #LST_current_meridian = float(round(lst_hours, 2))
+    ra_start = float(round(ra_min_deg, 2))
+    ra_end = float(round(ra_max_deg, 2))
     Dec_visible_min = float(round(dec_min, 2))
 
-    RA_visible_start_angle = RA_visible_start*15
-    RA_visible_end_angle = RA_visible_end*15
-
-    constraint = f""" ra BETWEEN {RA_visible_start} AND {RA_visible_end} 
+    constraint = f""" ra BETWEEN {ra_start} AND {ra_end} 
         AND dec >= {Dec_visible_min}"""
 
-    if (RA_visible_end < RA_visible_start):
-        constraint = f"""(ra BETWEEN 0 AND {RA_visible_end_angle} 
-        OR (ra BETWEEN {RA_visible_start_angle} AND 360))
+    if (ra_end < ra_start):
+        constraint = f"""(ra BETWEEN 0 AND {ra_end} 
+        OR (ra BETWEEN {ra_start} AND 360))
         AND dec >= {Dec_visible_min}"""
 
-    print("Intervalle angle RA: [",RA_visible_start_angle ,"-", RA_visible_end_angle,"]")
+    print("Intervalle angle RA: [",ra_start ,"-", ra_end,"]")
 
-    return constraint
+    return {
+    "sql_where": constraint,
+    "meridian_deg": lst_deg,
+    "lst_hms": lst.to_string(unit=u.hour, sep='hms')
+}
 
-
-constraint = get_ra_dec_constraint("Paris")
+constraint = get_ra_dec_constraint("Paris")["sql_where"]
 
 # print(f"""SELECT name FROM Celestial WHERE {constraint} """)
 row = cur.execute(f"""SELECT name FROM Celestial WHERE {constraint} """).fetchall()
