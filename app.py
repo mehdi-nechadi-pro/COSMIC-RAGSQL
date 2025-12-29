@@ -34,7 +34,7 @@ def initialize_agent():
         google_api_key=GOOGLE_API_KEY,
         temperature=0
     )
-    db = SQLDatabase.from_uri("sqlite:///base.db", sample_rows_in_table_info=0)
+    db = SQLDatabase.from_uri("sqlite:///Celestial.db", sample_rows_in_table_info=0)
     toolkit = SQLDatabaseToolkit(db=db, llm=llm)
 
     @tool

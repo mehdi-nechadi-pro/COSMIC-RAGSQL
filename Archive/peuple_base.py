@@ -129,19 +129,19 @@ def clean_from_radians(rad_tuple):
 
 ################## MAIN ##################
 
-con = sqlite3.connect("base_fin.db")
+con = sqlite3.connect("Celestial.db")
 cur = con.cursor()
 
-cur.execute("CREATE TABLE Celestial(name, type, constellation, ra, dec, magnitude, url)")
+cur.execute("CREATE TABLE Celestial(name, type, constellation, ra, dec, magnitude, url, catalogue)")
 
-caldwell_ngc = load_database("caldwell.json")
+caldwell_ngc = load_database("Archive/caldwell.json")
 
 
 for i in range(1, 111):
     messier_name = f"M{i}"
     
     try:
-        obj = Dso(messier_name)
+        obj = Dso(messier_name) # Récupération des infos OPENGC
      
         obj_type = obj.type.replace(" ", "_")
 
@@ -156,22 +156,24 @@ for i in range(1, 111):
 
         url = get_image_wikipedia(messier_name)
 
+        catalogue = "Messier"
+
         print(f"✅ {messier_name}, {obj_type}, {constellation}, {ra_final}, {dec_final}, {magnitude_sql},{url}")
 
         cur.execute(f"""INSERT INTO Celestial VALUES 
-                ('{messier_name}', '{obj_type}', '{constellation}', {ra_final}, {dec_final}, {magnitude_sql}, '{url}')
+                ('{messier_name}', '{obj_type}', '{constellation}', {ra_final}, {dec_final}, {magnitude_sql}, '{url}', '{catalogue}')
         """)
         
     except Exception as e:
         print(f"❌ Erreur sur {messier_name}: {e}")
 
-print("Catalogue IC/NGC")
+print("Catalogue IC/NGC (Caldwell)")
 
 for caldwell_id, NGC_IC_Correspondance in caldwell_ngc.items():
     try:
         ngc_ic_id = NGC_IC_Correspondance
 
-        obj = Dso(ngc_ic_id)
+        obj = Dso(ngc_ic_id) # Récupération des infos OPENGC
 
         obj_type = obj.type.replace(" ", "_")
         
@@ -188,10 +190,12 @@ for caldwell_id, NGC_IC_Correspondance in caldwell_ngc.items():
     
         url = get_image_wikipedia(name_wikipedia)
 
+        catalogue = "Caldwell"
+
         print(f"✅ {ngc_ic_id}, {obj_type}, {constellation}, {ra_final}, {dec_final}, {magnitude_sql},{url}")
 
         cur.execute(f""" INSERT INTO Celestial VALUES 
-                ('{ngc_ic_id}', '{obj_type}', '{constellation}', {ra_final}, {dec_final}, {magnitude_sql}, '{url}')
+                ('{ngc_ic_id}', '{obj_type}', '{constellation}', {ra_final}, {dec_final}, {magnitude_sql}, '{url}', '{catalogue}')
         """)
     
     except Exception as e:
