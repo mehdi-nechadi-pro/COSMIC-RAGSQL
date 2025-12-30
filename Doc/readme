@@ -25,10 +25,15 @@ Ce qui a été fait :
 - Astropy Fonction faite -> Il manque les tests et l'histoire d'UTC et heure d'hiver 
 (Ville, Heure) -> Contrainte SQL renvoyé. On récupère la longitude et on calcule le LST puis on définis la plage de RA ou l'objet doit se situer dans la base (6h avant et après) pour l'observation.
 
+- Interface FastAPI lié à VirtualSky (pour l'instant on écrit en dur l'objet en json et il est affiché)
+
+- Architecture de Base (Orchestrateur -> Astronome -> Vulgarisateur)
+- Rectificatif Astropy en cours (sur le papier le rectangle de visibilité et une bonne idée mais y'a + de la moitié de la zone qui est sous terre donc à améliorer pour que ça colle a la réalité)
+
 Missions en suspend : 
 
 - Astropy : TEST ROBUSTE NECESSAIRE
-- Nouvelle architecture Agent (Pré-prompt -> on trie les infos (soit Demande générale, sois observation) si observation, dès qu'on a lieu/heure on peut envoyer le prompt avec l'outil astropy et ensuite structurer la réponse sinon juste envoyer réponse)
+- Récupération de l'heure pour l'Agent (pour l'instant localisation + heure codé en dur)
 - Test Prompt 
 - Structuration Réponse + Interface web
 - Embedding photo 
