@@ -28,14 +28,20 @@ Ce qui a été fait :
 - Interface FastAPI lié à VirtualSky (pour l'instant on écrit en dur l'objet en json et il est affiché)
 
 - Architecture de Base (Orchestrateur -> Astronome -> Vulgarisateur)
-- Rectificatif Astropy en cours (sur le papier le rectangle de visibilité et une bonne idée mais y'a + de la moitié de la zone qui est sous terre donc à améliorer pour que ça colle a la réalité)
+- Rectificatif Astropy en cours (On regarde juste l'altitude, mais on doit intégrer le soleil soit dans le filtre soit pour l'agent)
+- Base finale parfaite 
+- Lien WEB et APP
+- LIEU/HEURE DYNAMIQUE ENFIN (par défaut on active la geolocalisation, sinon c'est paris) et dans la requete on peut dire "tokyo" et il va tout calculer et afficher la map de tokyo ET IL COMPREND "ce soir", "ce matin" 
 
 Missions en suspend : 
-
 - Astropy : TEST ROBUSTE NECESSAIRE
-- Récupération de l'heure pour l'Agent (pour l'instant localisation + heure codé en dur)
+- PRENDRE EN COMPTE LE SOLEIL
 - Test Prompt 
-- Structuration Réponse + Interface web
 - Embedding photo 
 - Renvoi carte observation en 2D simpliste 
 - Interface 3D ? 
+
+POUR DEMAIN : 
+- NETTOYER LE CODE FAIRE COMMIT PROJET_WEB PUIS AJOUTER /WEB 
+- TROUVER SOLUTION SOLEIL 
+- CONTINUER DE TESTER 

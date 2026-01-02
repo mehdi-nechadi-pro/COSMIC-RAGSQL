@@ -82,10 +82,43 @@ iau_constellations = {
     "PAV": "Pavo", "PEG": "Pegasus", "PER": "Perseus", "PHE": "Phoenix",
     "PIC": "Pictor", "PSC": "Pisces", "PSA": "Piscis Austrinus", "PUP": "Puppis",
     "PYX": "Pyxis", "RET": "Reticulum", "SGE": "Sagitta", "SGR": "Sagittarius",
-    "SCO": "Scorpius", "SCL": "Sculptor", "SCT": "Scutum", "SER": "Serpens",
+    "SCO": "Scorpius", "SCL": "Sculptor", "SCT": "Scutum", "SE1": "Serpens", "SE2": "Serpens",
     "SEX": "Sextans", "TAU": "Taurus", "TEL": "Telescopium", "TRI": "Triangulum",
     "TRA": "Triangulum Australe", "TUC": "Tucana", "UMA": "Ursa Major", "UMI": "Ursa Minor",
     "VEL": "Vela", "VIR": "Virgo", "VOL": "Volans", "VUL": "Vulpecula"
+}
+
+MANUAL_CALDWELL_DATA = {
+    "Mel25": {
+        "name": "Mel25",
+        "type": "Open_Cluster",
+        "constellation": "TAU", 
+        "ra": 66.79,       
+        "dec": 15.87,     
+        "magnitude": 0.5,   
+        "url": "https://en.wikipedia.org/wiki/Hyades_(star_cluster)",
+        "catalogue": "Caldwell"
+    },
+    "Coalsack": {
+        "name": "Coalsack_Nebula",
+        "type": "Dark_Nebula",
+        "constellation": "CRU",  
+        "ra": 192.45,   
+        "dec": -62.50,     
+        "magnitude": 99.9,     
+        "url": "https://en.wikipedia.org/wiki/Coalsack_Nebula",
+        "catalogue": "Caldwell"
+    },
+    "Sh2-155": {
+        "name": "Sh2-155",
+        "type": "Nebula",
+        "constellation": "CEP", 
+        "ra": 343.95,         
+        "dec": 62.62,       
+        "magnitude": 7.7,
+        "url": "https://en.wikipedia.org/wiki/Cave_Nebula",
+        "catalogue": "Caldwell"
+    }
 }
 
 def get_constellation_name(abbr):
@@ -173,22 +206,36 @@ for caldwell_id, NGC_IC_Correspondance in caldwell_ngc.items():
     try:
         ngc_ic_id = NGC_IC_Correspondance
 
-        obj = Dso(ngc_ic_id) # Récupération des infos OPENGC
+        manual_data = MANUAL_CALDWELL_DATA
+        if NGC_IC_Correspondance in manual_data:
+            data = manual_data.get(NGC_IC_Correspondance)
+            print(data)
 
-        obj_type = obj.type.replace(" ", "_")
+            ngc_ic_id = data["name"]
+            obj_type = data["type"]
+            constellation = get_constellation_name(data["constellation"])
+            ra_final = data["ra"]
+            dec_final = data["dec"]
+            magnitude_sql = data["magnitude"]
+            url = data["url"]
+
+        else: 
+            obj = Dso(ngc_ic_id) # Récupération des infos OPENGC
+
+            obj_type = obj.type.replace(" ", "_")
+            
+            constellation_IAU = obj.constellation
+            constellation = get_constellation_name(constellation_IAU)
+
+            ra_final, dec_final = clean_from_radians(obj.rad_coords)
+
+            magnitude = obj.magnitudes
+            magnitude = get_best_mag(magnitude)
+            magnitude_sql = magnitude if magnitude is not None else "NULL"
+
+            name_wikipedia = propre = re.sub(r"(\D)(\d)", r"\1 \2", ngc_ic_id)
         
-        constellation_IAU = obj.constellation
-        constellation = get_constellation_name(constellation_IAU)
-
-        ra_final, dec_final = clean_from_radians(obj.rad_coords)
-
-        magnitude = obj.magnitudes
-        magnitude = get_best_mag(magnitude)
-        magnitude_sql = magnitude if magnitude is not None else "NULL"
-
-        name_wikipedia = propre = re.sub(r"(\D)(\d)", r"\1 \2", ngc_ic_id)
-    
-        url = get_image_wikipedia(name_wikipedia)
+            url = get_image_wikipedia(name_wikipedia)
 
         catalogue = "Caldwell"
 

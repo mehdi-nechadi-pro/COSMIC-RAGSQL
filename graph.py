@@ -1,16 +1,20 @@
+import json
 import os
-from typing import Annotated
+import sqlite3
+from typing import Annotated, Any, Dict, List
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, event
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph
 from langgraph.graph.message import add_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
 from IPython.display import Image, display
 from langchain_community.utilities import SQLDatabase
-from astropy_function import get_ra_dec_constraint
+from astropy_function import get_ra_dec_constraint, maths_altitude
 import re
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_core.messages import AIMessage
 
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -26,6 +30,7 @@ class AgentState(TypedDict):
     vulgarisation_output: str   # "Blablabla"
     web_json: str       # "JSON :"
     messages: Annotated[list, add_messages]
+    final_target: List[Dict[str, Any]]
 graph_builder = StateGraph(AgentState)
 
 
@@ -64,7 +69,18 @@ def create_sql_tool(db):
             
     return execute_sql
 
-db = SQLDatabase.from_uri("sqlite:///Celestial.db", sample_rows_in_table_info=0)
+
+def _register_custom_functions(dbapi_connection, connection_record):
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        dbapi_connection.create_function("IS_VISIBLE", 5, maths_altitude)
+
+engine = create_engine("sqlite:///Celestial.db")
+
+event.listen(engine, 'connect', _register_custom_functions)
+
+db = SQLDatabase(engine)
+
+
 schema_brut = db.run("PRAGMA table_info(Celestial);")
 
 sql_tool = create_sql_tool(db)
@@ -104,6 +120,7 @@ UNIVERSAL_ASTRONOMER_PROMPT = """Tu es un Assistant Astronome Expert connecté �
    - 'ra' (Right Ascension, 0-360 degrés)
    - 'dec' (Declination, -90 à +90 degrés)
    - 'magnitude' (Luminosité : plus petit = plus brillant. À l'œil nu < 6)
+   - 'catalogue' ('Messier' ou 'Caldwell')
 
 *** TA MÉTHODOLOGIE (DYNAMIQUE) ***
 Etape 1 : Analyse la demande.
@@ -130,13 +147,26 @@ en combinant strictement la contrainte sql_where fournie par l'outil de calcul e
 - Ne parle PAS avant d'avoir interrogé le SQL.
 - Si le SQL est vide et qu'il est question de visibilité sur les objets Messier/Caldwell, l'objet est pas visible.
 - Si le type n'est pas exigé par l'utilisateur inutile de filtrer dessus 
-- ASC LIMIT 5 a la fin de chaque requete 
+
+CONSIGNE DE SORTIE FINALE :
+Lorsque tu as trouvé les informations :
+1. N'utilise PLUS d'outils.
+2. Ta réponse DOIT être un JSON valide, sans balises markdown (pas de ```json), sous cette forme exacte :
+
+  "chat_reply": "Ta réponse ici ...",
+  "targets": [
+    "label": "Nom Objet", "ra": 123.45, "dec": -12.34
+  ]
+
+Si tu n'as pas d'objets à afficher, laisse la liste "targets" vide.
 
 *** OBJECTIF ACTUEL DE L'UTILISATEUR ***
 "{mission}"
 """
 
-VULGARISATION_PROMPT = ""
+VULGARISATION_PROMPT = """ Tu es un agent vulgarisateur d'astronomie ayant des infos vérifiés
+sur les objets Messier/Caldwell, Vulgarise ces données astronomiques pour un débutant en étant très concis sur ce texte 
+(5 phrase maximales) : {last_message} """
 
 def orchestrateur(state = AgentState):
     infos = state.get("infos")
@@ -168,17 +198,47 @@ def astronomer(state = AgentState):
     }
     final_message = [system_message] + history
 
-    response = llm_with_tools.invoke(final_message)
+    res = llm_with_tools.invoke(final_message)
+    raw_content = res.content
     
-    print_clean_debug("Astro", response)
-    return {"messages": [response]}
+    #----------- PARSING JSON ------------#
+    if isinstance(raw_content, list):
+        raw_content = "".join([block["text"] for block in raw_content if block.get("type") == "text"])
+
+    clean_text = raw_content.replace("```json", "").replace("```", "").strip()
+
+    try:
+        data = json.loads(clean_text)
+
+        final_target = data.get("targets", [])
+        chat_reply = data.get("chat_reply", "Voici les résultats.")
+
+        final_msg = AIMessage(content=chat_reply)
+
+        return {
+            "messages": [final_msg], 
+            "final_target": final_target
+        }
+
+    except json.JSONDecodeError:
+        return {
+            "messages": [res], 
+            "final_target": []
+        }
+
+
 
 def vulgarisation(state = AgentState):
     last_message = state["messages"][-1].content
-    
-    # On demande à Gemini de vulgariser ce résultat
-    res = llm_lite.invoke(f"Vulgarise ces données astronomiques pour un débutant en étant très concis sur ce texte (5 phrase maximales) : {last_message}")
-    
+
+    print(state.get('final_target'))
+
+    prompt = VULGARISATION_PROMPT.format(
+            last_message=last_message,
+        )
+
+    res = llm_lite.invoke(prompt)
+
     return {"vulgarisation_output": res.content}
 
 
@@ -191,7 +251,6 @@ def orchestr_switch(state = AgentState):
 dict_ = {'astronome':'astro', 'vulgaris':'vulga'}
 
 
-# user_input = input("User: ")
 
 graph_builder.add_node("orchest", orchestrateur)
 graph_builder.add_node("astro", astronomer)
@@ -207,18 +266,8 @@ graph_builder.set_finish_point("vulga")
 
 
 graph = graph_builder.compile()
-# print(graph.get_graph().draw_ascii())
-try:
-    png_data = graph.get_graph().draw_mermaid_png()
-    
-    with open("graph.png", "wb") as f:
-        f.write(png_data)
-except Exception:
-    pass
 
-# user_input = input("User: ")
-
-user_input = "Que puis-je voir de beau ce soir ?"
+user_input = "Y'a combien de Constellations, d'objets Caldwell & Messier ? Que puis-je voir ce soir ? "
 user_city = "Tokyo"
 user_time = "2025-12-31 06:50:00"
 
@@ -232,8 +281,6 @@ initial_state = {
 
 for event in graph.stream(initial_state):
     for node_name, value in event.items():
-        # print(f"--- Fin de l'exécution du nœud : {node_name} ---")
-
         if value is None:
             print(f"⚠️ Le nœud {node_name} n'a rien renvoyé.")
             continue
@@ -244,35 +291,3 @@ for event in graph.stream(initial_state):
         if "web_json" in value:
             print("Assistant (JSON):", value["web_json"])
 
-#         for value in event.values():
-#             print("Assistant:", value["messages"][-1].content)
-
-
-# def chatbot(state: AgentState):
-#     return {"messages": [llm.invoke(state["messages"])]}
-# #The first argument is the unique node name
-# # The second argument is the function or object that will be called whenever the node is used.’’’
-# graph_builder.add_node("chatbot", chatbot)
-
-# # Set entry and finish points
-# graph_builder.set_entry_point("chatbot")
-# graph_builder.set_finish_point("chatbot")
-
-# graph = graph_builder.compile()
-# try:
-#     png_data = graph.get_graph().draw_mermaid_png()
-    
-#     with open("graph.png", "wb") as f:
-#         f.write(png_data)
-# except Exception:
-#     pass
-
-# # Run the chatbot
-# while True:
-#     user_input = input("User: ")
-#     if user_input.lower() in ["quit", "exit", "q"]:
-#         print("Goodbye!")
-#         break
-#     for event in graph.stream({"messages": [("user", user_input)]}):
-#         for value in event.values():
-#             print("Assistant:", value["messages"][-1].content) 
