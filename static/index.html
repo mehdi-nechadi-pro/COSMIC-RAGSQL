@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>AstroChat</title>
+    <script src="/static/jquery.min.js"></script>
+    <script src="/static/virtualsky.js"></script>
+    <style>
+        body { margin: 0; padding: 0; display: flex; height: 100vh; background: #0b0b0b; color: white; font-family: sans-serif; overflow: hidden; }
+    
+        #sidebar {
+            width: 30%;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #333;
+            background: #121212;
+        }
+        #chat-history {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .msg { padding: 10px 15px; border-radius: 10px; max-width: 85%; line-height: 1.4; font-size: 14px; }
+        .user { background: #0056b3; align-self: flex-end; color: white; }
+        .bot { background: #2a2a2a; align-self: flex-start; color: #ddd; }
+
+        #input-area {
+            padding: 20px;
+            background: #1a1a1a;
+            border-top: 1px solid #333;
+            display: flex;
+            gap: 10px;
+        }
+        input { flex: 1; padding: 10px; border-radius: 5px; border: 1px solid #444; background: #222; color: white; }
+        button { padding: 10px 20px; background: #0056b3; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #004494; }
+
+        #map-container { width: 70%; height: 100%; position: relative; }
+        #starmap { width: 100%; height: 100%; }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <div id="chat-history">
+            <div class="msg bot">Bonjour ! Je suis ton assistant astronome. Demande-moi ce que tu veux voir (ex: "Montre-moi Orion").</div>
+        </div>
+        <div id="input-area">
+            <input type="text" id="userMsg" placeholder="Écrivez votre message..." onkeydown="if(event.key==='Enter') sendChat()">
+            <button onclick="sendChat()">Envoyer</button>
+        </div>
+    </div>
+
+    <div id="map-container">
+        <div id="starmap"></div>
+    </div>
+
+    <script>
+        var planetarium;
+
+        let currentUserState = { // PARIS PAR DEFAUT
+            lat: 48.8566, 
+            long: 2.3522,
+            hour: new Date().toISOString(),
+            city: "Test"
+        };
+
+        // --- 1. FONCTION CRÉATION CARTE ---
+        function createMap(startRA, startDEC, fovVal, lat, long, hour) {
+            console.log("Création de Map avec Hour = ", hour)
+            $('#starmap').empty(); // On nettoie pour éviter les doublons
+            
+            planetarium = $.virtualsky({
+                id: 'starmap',
+                projection: 'stereo',
+                ground: true,
+                atmosphere: true,
+                constellations: true,
+                cardinalpoints: true,
+                latitude: lat,     //latitude 35.9
+                longitude: long,   //longit 139.6
+                lang: 'fr',
+                clock: hour,
+                ra: startRA,
+                dec: startDEC,
+                fov: fovVal,
+                live: false
+            });
+
+        }
+        // Envoyer à Python
+        async function sendChat() {
+            var inputField = document.getElementById("userMsg");
+            var text = inputField.value.trim();
+            if (!text) return;
+
+            addMessage(text, "user");
+            inputField.value = "";
+            addMessage("Recherche en cours...", "bot temporary");
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: text, city: "Tokyo", hour: currentUserState.hour, 
+                    latitude: currentUserState.lat, longitude: currentUserState.long, city: currentUserState.city})
+                });
+
+                const data = await response.json();
+
+                // Supprimer le message "Recherche..."
+                document.querySelector(".temporary")?.remove();
+
+                // Afficher réponse Bot
+                addMessage(data.reply, "bot");
+
+                // GESTION DE LA CARTE
+                var targets = data.targets;
+                if (targets && targets.length > 0) {
+
+                    hour = data.hour.replace("+00:00", "Z")
+                    
+                    console.log(data)
+                    console.log("State avant :", currentUserState)
+
+                    currentUserState.city = data.detected_city
+                    currentUserState.hour = data.hour
+                    currentUserState.lat = data.latitude
+                    currentUserState.long = data.longitude
+                    
+                    console.log("State après :", currentUserState)
+                    var first = targets[0];
+                    createMap(parseFloat(first.ra), parseFloat(first.dec), 45, parseFloat(data.latitude), parseFloat(data.longitude), hour); // On va ajouter l'heure quand on saura comment modifier manuellement l'heure sur virtualsky
+
+                    targets.forEach(obj => {
+                        planetarium.addPointer({
+                            ra: parseFloat(obj.ra),
+                            dec: parseFloat(obj.dec),
+                            label: obj.label,
+                            colour: 'orange',
+                            r: 15
+                        });
+                    });
+                }
+
+            } catch (error) {
+                console.error(error);
+                document.querySelector(".temporary")?.remove();
+                addMessage("Erreur de connexion au cerveau.", "bot");
+            }
+        }
+
+        function addMessage(text, className) {
+            var chatDiv = document.getElementById("chat-history");
+            var msgDiv = document.createElement("div");
+            msgDiv.className = "msg " + className;
+            msgDiv.innerText = text;
+            chatDiv.appendChild(msgDiv);
+            chatDiv.scrollTop = chatDiv.scrollHeight;
+        }
+
+        $(document).ready(function() {
+            if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            async (position) => {
+                console.log("✅ Position trouvée !");
+                currentUserState.lat = position.coords.latitude;
+                currentUserState.long = position.coords.longitude;
+                
+                createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
+            },
+            (error) => {
+                console.warn("⚠️ GPS refusé ou erreur, on reste sur Paris par défaut.");
+                createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
+            }
+        );
+    } else {
+        createMap(currentUserState.lat, currentUserState.long, null);
+    }
+            createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
+        });
+
+    
+    </script>
+
+</body>
+</html>

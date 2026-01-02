@@ -1,8 +1,10 @@
 import json
 import os
 import sqlite3
-from typing import Annotated, Any, Dict, List
+from typing import Annotated, Any, Dict, List, Optional
 from dotenv import load_dotenv
+from pydantic import Field
+import requests
 from sqlalchemy import create_engine, event
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph
@@ -10,7 +12,7 @@ from langgraph.graph.message import add_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
 from IPython.display import Image, display
 from langchain_community.utilities import SQLDatabase
-from astropy_function import get_ra_dec_constraint, maths_altitude
+from astropy_function import get_ra_dec_constraint, maths_altitude, get_coordinates
 import re
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -20,17 +22,16 @@ load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 class AgentState(TypedDict):
-    city: str   # "Lyon", "Paris"
+    #city: str   # "Lyon", "Paris"
     hour: str   # "2025-12-30 17:29:45.285278"
     intent: str  # "Observation", "education"
     infos: str  # "Whats the best nebula we can see ?"
-    sql_output: str # "M42"
-    astropy_status: str     # "Sucess", "Skipped", "NoResult"
-    status_debug: str       # "There is no black hole in the base"
     vulgarisation_output: str   # "Blablabla"
-    web_json: str       # "JSON :"
-    messages: Annotated[list, add_messages]
-    final_target: List[Dict[str, Any]]
+    messages: Annotated[list, add_messages] # LISTE DES MESSAGES
+    final_target: List[Dict[str, Any]] # JSON OBJETS TROUVES
+    detected_city: Optional[str] = Field(description="Nom de la ville demandée par l'user, si différente de l'actuelle.")
+    latitude: float
+    longitude: float
 graph_builder = StateGraph(AgentState)
 
 
@@ -145,8 +146,9 @@ en combinant strictement la contrainte sql_where fournie par l'outil de calcul e
 
 *** RÈGLE D'OR ***
 - Ne parle PAS avant d'avoir interrogé le SQL.
-- Si le SQL est vide et qu'il est question de visibilité sur les objets Messier/Caldwell, l'objet est pas visible.
+- Si le SQL est vide et qu'il est question de visibilité sur les objets Messier/Caldwell, l'objet n'est pas visible.
 - Si le type n'est pas exigé par l'utilisateur inutile de filtrer dessus 
+- Effectue le - de requêtes possible 
 
 CONSIGNE DE SORTIE FINALE :
 Lorsque tu as trouvé les informations :
@@ -154,6 +156,8 @@ Lorsque tu as trouvé les informations :
 2. Ta réponse DOIT être un JSON valide, sans balises markdown (pas de ```json), sous cette forme exacte :
 
   "chat_reply": "Ta réponse ici ...",
+  "detected_city": N'invente pas, récupère la ville de l'utilisateur si il l'a évoqué précédemment,
+  "hour": N'invente pas, récupère l'heure voulue par l'utilisateur (Déduis le si il en parle), la forme : "2050-01-01T22:53:00"
   "targets": [
     "label": "Nom Objet", "ra": 123.45, "dec": -12.34
   ]
@@ -185,13 +189,15 @@ def orchestrateur(state = AgentState):
 
 def astronomer(state = AgentState):
 
+    # print("Astronomer : ", state)
+
     history = state.get("messages", [])
 
     system_message = {
         "role": "system",
         "content": UNIVERSAL_ASTRONOMER_PROMPT.format(
             schema=schema_brut,
-            city=state.get("city"),
+            city=state.get("detected_city"),
             hour=state.get("hour"),
             mission=state.get("infos")
         )
@@ -199,6 +205,7 @@ def astronomer(state = AgentState):
     final_message = [system_message] + history
 
     res = llm_with_tools.invoke(final_message)
+    print_clean_debug("Astro", res)
     raw_content = res.content
     
     #----------- PARSING JSON ------------#
@@ -206,27 +213,40 @@ def astronomer(state = AgentState):
         raw_content = "".join([block["text"] for block in raw_content if block.get("type") == "text"])
 
     clean_text = raw_content.replace("```json", "").replace("```", "").strip()
+    hour = state.get("hour")
+    detected_city = state.get("detected_city")
 
     try:
         data = json.loads(clean_text)
 
         final_target = data.get("targets", [])
         chat_reply = data.get("chat_reply", "Voici les résultats.")
+        hour = data.get("hour")
+        detected_city = data.get("detected_city")
+        lat,lon = get_coordinates(detected_city)
+        print("LLM : VILLE =", data.get("detected_city"), " LAT=", lat, " LON=", lon)
+
 
         final_msg = AIMessage(content=chat_reply)
 
+        print("Message : ", final_msg)
+
         return {
             "messages": [final_msg], 
-            "final_target": final_target
+            "final_target": final_target,
+            "detected_city": detected_city,
+            "latitude": lat,
+            "longitude": lon,
+            "hour": hour
         }
 
     except json.JSONDecodeError:
         return {
             "messages": [res], 
-            "final_target": []
+            "final_target": [],
+            "detected_city": detected_city,
+            "hour": hour
         }
-
-
 
 def vulgarisation(state = AgentState):
     last_message = state["messages"][-1].content
@@ -266,28 +286,3 @@ graph_builder.set_finish_point("vulga")
 
 
 graph = graph_builder.compile()
-
-user_input = "Y'a combien de Constellations, d'objets Caldwell & Messier ? Que puis-je voir ce soir ? "
-user_city = "Tokyo"
-user_time = "2025-12-31 06:50:00"
-
-
-initial_state = {
-    "infos": user_input,   
-    "city": user_city,
-    "hour": user_time, 
-    "messages": [("user", user_input)] 
-}
-
-for event in graph.stream(initial_state):
-    for node_name, value in event.items():
-        if value is None:
-            print(f"⚠️ Le nœud {node_name} n'a rien renvoyé.")
-            continue
-
-        if "vulgarisation_output" in value:
-            print("Assistant (Texte):", value["vulgarisation_output"])
-        
-        if "web_json" in value:
-            print("Assistant (JSON):", value["web_json"])
-

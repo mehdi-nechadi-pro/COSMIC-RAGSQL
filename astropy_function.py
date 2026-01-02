@@ -9,9 +9,25 @@ from langchain_core.tools import tool
 import math
 from timezonefinder import TimezoneFinder
 import pytz
+from functools import lru_cache
 
-# Initialisation des outils (une seule fois pour la perf)
-geolocator = Nominatim(user_agent="astronomy_master_agent_v1")
+geolocator = Nominatim(user_agent="mon_astro_app_v1")
+
+@lru_cache(maxsize=128)
+def get_coordinates(city_name: str):
+    """
+    Prend un nom de ville (ex: 'Lyon') et renvoie (lat, lon).
+    Renvoie None si introuvable.
+    """
+    try:
+        location = geolocator.geocode(city_name)
+        if location:
+            return location.latitude, location.longitude
+        return None
+    except Exception as e:
+        print(f"Erreur Geocoding : {e}")
+        return None
+
 tf = TimezoneFinder()
 
 def maths_altitude(ra, dec, lat, lst, min_alt=0):
@@ -40,6 +56,8 @@ def get_utc_time_from_city(city_name: str, local_date_str: str = ""):
     Retourne un tuple : (datetime_utc, latitude, longitude)
     Renvoie (None, None, None) en cas d'échec critique.
     """
+    local_date_str = local_date_str.replace("T", " ")
+    print("Paramètres get_utc_time_from_city : ", city_name, local_date_str)
     try:
         # 1. Géocodage
         location = geolocator.geocode(city_name)
