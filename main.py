@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 from geopy.geocoders import Nominatim
-from astropy_function import get_utc_time_from_city
+from astropy_function import get_target_utc_date, format_utc_to_local_display
 
 geolocator = Nominatim(user_agent="mon_astro_app_v1")
 
@@ -49,14 +49,22 @@ async def chat_endpoint(request: UserRequest):
     if not graph:
         return {"reply": "Erreur : Le graphe n'est pas chargé côté serveur.", "targets": []}
     
+    print("HEURE DONNE DES LE DEBUT : ", request.hour)
 
+    detected_city = get_city_from_latlon(request.latitude, request.longitude)
+
+    try:
+        initial_local_hour = format_utc_to_local_display(detected_city, request.hour)
+    except Exception as e:
+        print(f"⚠️ Erreur conversion init: {e}")
+        initial_local_hour = request.hour
 
     # 1. Préparer l'état pour LangGraph
     initial_state = {
         "infos": request.message,
         "latitude": request.latitude,
         "longitude": request.longitude,
-        "hour": request.hour,
+        "hour": initial_local_hour,
         "final_target": [],
         "messages": [("user", request.message)] ,
         "detected_city": get_city_from_latlon(request.latitude, request.longitude)
@@ -76,14 +84,16 @@ async def chat_endpoint(request: UserRequest):
         detected_city = result.get("detected_city")
 
         print("🔥 RESULTATS BACKEND OBTENUS : Ville detectée= ", detected_city, "Heure : ", hour ," Latitude= ", latitude, " Longitude= ", longitude)
-        hour, _, _ = get_utc_time_from_city(detected_city, hour)
-        print("Heure envoyé au front : ", hour)
+
+        dt_utc = get_target_utc_date(detected_city, result.get("hour"))
+        final_local_hour_str = format_utc_to_local_display(detected_city, dt_utc)
+
         return {
             "reply": reply,
             "targets": targets,
             "latitude": latitude,
             "longitude": longitude,
-            "hour": hour,
+            "hour": final_local_hour_str,
             "detected_city": detected_city
         }
         

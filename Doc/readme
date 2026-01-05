@@ -2,7 +2,7 @@ PROJET LLM
 
 Comment lancer l'application :
 
-python -m streamlit run app.py
+python -m uvicorn main:app --reload   
 
 Lancer les tests :
 
@@ -25,23 +25,25 @@ Ce qui a été fait :
 - Astropy Fonction faite -> Il manque les tests et l'histoire d'UTC et heure d'hiver 
 (Ville, Heure) -> Contrainte SQL renvoyé. On récupère la longitude et on calcule le LST puis on définis la plage de RA ou l'objet doit se situer dans la base (6h avant et après) pour l'observation.
 
-- Interface FastAPI lié à VirtualSky (pour l'instant on écrit en dur l'objet en json et il est affiché)
-
+- Interface FastAPI simple
 - Architecture de Base (Orchestrateur -> Astronome -> Vulgarisateur)
 - Rectificatif Astropy en cours (On regarde juste l'altitude, mais on doit intégrer le soleil soit dans le filtre soit pour l'agent)
 - Base finale parfaite 
 - Lien WEB et APP
+- Interface avec carte 3D
 - LIEU/HEURE DYNAMIQUE ENFIN (par défaut on active la geolocalisation, sinon c'est paris) et dans la requete on peut dire "tokyo" et il va tout calculer et afficher la map de tokyo ET IL COMPREND "ce soir", "ce matin" 
+- FAIRE COMMIT PROJET_WEB PUIS AJOUTER /WEB 
+- Soleil pris en compte !!
 
 Missions en suspend : 
+- Rajouter Planètes
+- Constellation
+- Interface qui claque 
 - Astropy : TEST ROBUSTE NECESSAIRE
-- PRENDRE EN COMPTE LE SOLEIL
 - Test Prompt 
 - Embedding photo 
-- Renvoi carte observation en 2D simpliste 
-- Interface 3D ? 
 
 POUR DEMAIN : 
-- NETTOYER LE CODE FAIRE COMMIT PROJET_WEB PUIS AJOUTER /WEB 
+- NETTOYER LE CODE
 - TROUVER SOLUTION SOLEIL 
 - CONTINUER DE TESTER 

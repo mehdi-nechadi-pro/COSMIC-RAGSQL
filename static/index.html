@@ -6,51 +6,171 @@
     <script src="/static/jquery.min.js"></script>
     <script src="/static/virtualsky.js"></script>
     <style>
-        body { margin: 0; padding: 0; display: flex; height: 100vh; background: #0b0b0b; color: white; font-family: sans-serif; overflow: hidden; }
-    
+        /* --- 1. CONFIGURATION GLOBALE --- */
+        body { 
+            margin: 0; padding: 0; 
+            display: flex; 
+            height: 100vh; 
+            background: #0b0b0b; 
+            color: white; 
+            font-family: sans-serif; 
+            overflow: hidden; 
+            position: relative;
+        }
+
+        /* --- 2. SIDEBAR (DESIGN MODERNE) --- */
         #sidebar {
-            width: 30%;
+            width: 40%;
             display: flex;
             flex-direction: column;
-            border-right: 1px solid #333;
             background: #121212;
+            border-right: 1px solid #2a2a2a;
+            /* Animation fluide */
+            transition: width 0.6s cubic-bezier(0.25, 1, 0.5, 1);
+            z-index: 10;
+            box-shadow: 5px 0 15px rgba(0,0,0,0.3);
         }
+
+        /* Header (Logo + Titre) */
+        .app-header {
+            padding: 20px;
+            border-bottom: 1px solid #2a2a2a;
+            background: rgba(30, 30, 30, 0.5);
+            backdrop-filter: blur(10px);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .logo-container {
+            text-decoration: none;
+            background: linear-gradient(135deg, #0056b3, #00a8ff);
+            width: 45px; height: 45px;
+            border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 24px;
+            box-shadow: 0 4px 10px rgba(0, 86, 179, 0.3);
+        }
+        
+        .app-info h2 { margin: 0; font-size: 18px; color: white; letter-spacing: 0.5px; }
+        .app-info p { margin: 0; font-size: 12px; color: #888; }
+
+        /* Zone de Chat */
         #chat-history {
             flex: 1;
             padding: 20px;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 15px;
+            gap: 20px;
+            scrollbar-width: thin;
+            scrollbar-color: #333 transparent;
         }
-        .msg { padding: 10px 15px; border-radius: 10px; max-width: 85%; line-height: 1.4; font-size: 14px; }
-        .user { background: #0056b3; align-self: flex-end; color: white; }
-        .bot { background: #2a2a2a; align-self: flex-start; color: #ddd; }
 
+        /* Bulles */
+        .msg { 
+            padding: 12px 16px; 
+            border-radius: 18px; 
+            max-width: 85%; 
+            line-height: 1.5; 
+            font-size: 14px; 
+            position: relative;
+            animation: fadeIn 0.3s ease;
+        }
+        .user { background: #0056b3; align-self: flex-end; color: white; border-bottom-right-radius: 4px; }
+        .bot { background: #252525; align-self: flex-start; color: #e0e0e0; border: 1px solid #333; border-bottom-left-radius: 4px; }
+
+        /* Zone Input */
         #input-area {
             padding: 20px;
-            background: #1a1a1a;
-            border-top: 1px solid #333;
-            display: flex;
-            gap: 10px;
+            background: #121212;
+            border-top: 1px solid #2a2a2a;
         }
-        input { flex: 1; padding: 10px; border-radius: 5px; border: 1px solid #444; background: #222; color: white; }
-        button { padding: 10px 20px; background: #0056b3; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
-        button:hover { background: #004494; }
 
-        #map-container { width: 70%; height: 100%; position: relative; }
-        #starmap { width: 100%; height: 100%; }
+        .input-wrapper {
+            display: flex; background: #1e1e1e; border-radius: 25px; padding: 5px 10px; border: 1px solid #333; transition: border-color 0.3s;
+        }
+        .input-wrapper:focus-within { border-color: #0056b3; }
+        input { flex: 1; padding: 12px; border: none; background: transparent; color: white; outline: none; font-size: 14px; }
+        #input-area button { background: transparent; color: #0056b3; border: none; padding: 8px 15px; cursor: pointer; transition: transform 0.2s, color 0.2s; display: flex; align-items: center; }
+        #input-area button:hover { color: #4dabf7; transform: translateX(3px); }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* --- 3. MAP CONTAINER --- */
+        #map-container { 
+            width: 60%; 
+            height: 100%; 
+            position: relative; 
+            transition: width 0.6s cubic-bezier(0.25, 1, 0.5, 1), opacity 0.3s ease;
+            overflow: hidden;
+        }
+
+        #starmap { 
+            width: 100%; 
+            height: 100%;
+            min-width: 70vw; 
+        }
+
+        /* --- 4. LE BOUTON SLIDE --- */
+        #toggleMapBtn {
+            position: absolute;
+            top: 50%;
+            left: 40%; 
+            transform: translate(-50%, -50%);
+            z-index: 100; /* Toujours au dessus */
+            width: 40px; 
+            height: 40px;
+            border-radius: 50%;
+            background: #0056b3;
+            color: white;
+            border: 2px solid #121212;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px;
+            transition: left 0.6s cubic-bezier(0.25, 1, 0.5, 1), transform 0.4s ease;
+            box-shadow: 0 0 15px rgba(0,0,0,0.5);
+        }
+        #toggleMapBtn:hover { transform: translate(-50%, -50%) scale(1.15); }
+
+        /* --- 5. ETAT FERMÉ (Correction Typo et Logique) --- */
+        /* J'ai corrigé "body.map-" en "body.map-closed" */
+        body.map-closed #sidebar { width: 100%; }
+        body.map-closed #map-container { width: 0%; opacity: 0; }
+        body.map-closed #toggleMapBtn { 
+            left: 100%; 
+            transform: translate(-140%, -50%) rotate(180deg); 
+        }
+
     </style>
 </head>
-<body>
+<body class="map-closed">
 
     <div id="sidebar">
-        <div id="chat-history">
-            <div class="msg bot">Bonjour ! Je suis ton assistant astronome. Demande-moi ce que tu veux voir (ex: "Montre-moi Orion").</div>
+        <div class="app-header">
+            <a href="#" class="logo-container">
+                <span class="logo-icon">🪐</span> 
+            </a>
+            <div class="app-info">
+                <h2>AstroChat</h2>
+                <p>Assistant d'observation</p>
+            </div>
         </div>
+
+        <div id="chat-history">
+            <div class="msg bot">
+                Bonjour ! Je suis ton assistant astronome. 🔭<br>
+                Pose-moi des questions générales sur l'astronomie ou sur la visibilité d'un objet céleste !!
+            </div>
+        </div>
+
         <div id="input-area">
-            <input type="text" id="userMsg" placeholder="Écrivez votre message..." onkeydown="if(event.key==='Enter') sendChat()">
-            <button onclick="sendChat()">Envoyer</button>
+            <div class="input-wrapper">
+                <input type="text" id="userMsg" placeholder="Pose ta question..." onkeydown="if(event.key==='Enter') sendChat()">
+                <button onclick="sendChat()">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path></svg>
+                </button>
+            </div>
         </div>
     </div>
 
@@ -58,21 +178,18 @@
         <div id="starmap"></div>
     </div>
 
+    <button id="toggleMapBtn" onclick="toggleMap()">➤</button>
+
     <script>
         var planetarium;
-
-        let currentUserState = { // PARIS PAR DEFAUT
-            lat: 48.8566, 
-            long: 2.3522,
-            hour: new Date().toISOString(),
-            city: "Test"
+        let currentUserState = {
+            lat: 48.8566, long: 2.3522, hour: new Date().toISOString(), city: "Localisation inconnue"
         };
 
-        // --- 1. FONCTION CRÉATION CARTE ---
-        function createMap(startRA, startDEC, fovVal, lat, long, hour) {
-            console.log("Création de Map avec Hour = ", hour)
-            $('#starmap').empty(); // On nettoie pour éviter les doublons
-            
+        // --- FONCTION CREATE MAP ---
+        function createMap(startRA, startDEC, fovVal, lat, long, hourString) {
+            let dateObj = new Date(hourString);
+            $('#starmap').empty();
             planetarium = $.virtualsky({
                 id: 'starmap',
                 projection: 'stereo',
@@ -80,18 +197,18 @@
                 atmosphere: true,
                 constellations: true,
                 cardinalpoints: true,
-                latitude: lat,     //latitude 35.9
-                longitude: long,   //longit 139.6
+                planets: true,
+                latitude: parseFloat(lat),
+                longitude: parseFloat(long),
                 lang: 'fr',
-                clock: hour,
+                clock: dateObj,
                 ra: startRA,
                 dec: startDEC,
-                fov: fovVal,
+                fov: fovVal || 100,
                 live: false
             });
-
         }
-        // Envoyer à Python
+
         async function sendChat() {
             var inputField = document.getElementById("userMsg");
             var text = inputField.value.trim();
@@ -105,51 +222,48 @@
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: text, city: "Tokyo", hour: currentUserState.hour, 
-                    latitude: currentUserState.lat, longitude: currentUserState.long, city: currentUserState.city})
+                    body: JSON.stringify({ 
+                        message: text, 
+                        city: currentUserState.city, 
+                        hour: currentUserState.hour, 
+                        latitude: currentUserState.lat, 
+                        longitude: currentUserState.long
+                    })
                 });
 
                 const data = await response.json();
-
-                // Supprimer le message "Recherche..."
                 document.querySelector(".temporary")?.remove();
-
-                // Afficher réponse Bot
                 addMessage(data.reply, "bot");
 
-                // GESTION DE LA CARTE
+                if (data.detected_city) currentUserState.city = data.detected_city;
+                if (data.hour) currentUserState.hour = data.hour;
+                if (data.latitude) currentUserState.lat = data.latitude;
+                if (data.longitude) currentUserState.long = data.longitude;
+
                 var targets = data.targets;
                 if (targets && targets.length > 0) {
-
-                    hour = data.hour.replace("+00:00", "Z")
-                    
-                    console.log(data)
-                    console.log("State avant :", currentUserState)
-
-                    currentUserState.city = data.detected_city
-                    currentUserState.hour = data.hour
-                    currentUserState.lat = data.latitude
-                    currentUserState.long = data.longitude
-                    
-                    console.log("State après :", currentUserState)
                     var first = targets[0];
-                    createMap(parseFloat(first.ra), parseFloat(first.dec), 45, parseFloat(data.latitude), parseFloat(data.longitude), hour); // On va ajouter l'heure quand on saura comment modifier manuellement l'heure sur virtualsky
-
+                    createMap(parseFloat(first.ra), parseFloat(first.dec), 45, parseFloat(data.latitude), parseFloat(data.longitude), data.hour);
                     targets.forEach(obj => {
                         planetarium.addPointer({
-                            ra: parseFloat(obj.ra),
-                            dec: parseFloat(obj.dec),
-                            label: obj.label,
-                            colour: 'orange',
-                            r: 15
+                            ra: parseFloat(obj.ra), dec: parseFloat(obj.dec), label: obj.label, colour: 'orange', r: 15
                         });
-                    });
+                    })
+                        
+                } else {
+                    createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
                 }
+
+                // OPTIONNEL : Ouvrir la map automatiquement quand on reçoit une réponse avec des cibles
+                // if (targets && targets.length > 0) {
+                //    document.body.classList.remove('map-closed');
+                //    setTimeout(() => { if (planetarium) planetarium.resize(); }, 600);
+                // }
 
             } catch (error) {
                 console.error(error);
                 document.querySelector(".temporary")?.remove();
-                addMessage("Erreur de connexion au cerveau.", "bot");
+                addMessage("Erreur : " + error, "bot");
             }
         }
 
@@ -157,34 +271,32 @@
             var chatDiv = document.getElementById("chat-history");
             var msgDiv = document.createElement("div");
             msgDiv.className = "msg " + className;
-            msgDiv.innerText = text;
+            msgDiv.innerHTML = text; 
             chatDiv.appendChild(msgDiv);
             chatDiv.scrollTop = chatDiv.scrollHeight;
         }
 
+        function toggleMap() {
+            document.body.classList.toggle('map-closed');
+            setTimeout(() => { if (planetarium) planetarium.resize(); }, 600);
+        }
+
         $(document).ready(function() {
             if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-            async (position) => {
-                console.log("✅ Position trouvée !");
-                currentUserState.lat = position.coords.latitude;
-                currentUserState.long = position.coords.longitude;
-                
-                createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
-            },
-            (error) => {
-                console.warn("⚠️ GPS refusé ou erreur, on reste sur Paris par défaut.");
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        currentUserState.lat = position.coords.latitude;
+                        currentUserState.long = position.coords.longitude;
+                        createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
+                    }, 
+                    (error) => {
+                        createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
+                    }
+                );
+            } else {
                 createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
             }
-        );
-    } else {
-        createMap(currentUserState.lat, currentUserState.long, null);
-    }
-            createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
         });
-
-    
     </script>
-
 </body>
 </html>

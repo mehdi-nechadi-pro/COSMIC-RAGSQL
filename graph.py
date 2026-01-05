@@ -12,7 +12,7 @@ from langgraph.graph.message import add_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
 from IPython.display import Image, display
 from langchain_community.utilities import SQLDatabase
-from astropy_function import get_ra_dec_constraint, maths_altitude, get_coordinates
+from astropy_function import get_ra_dec_constraint, maths_altitude, get_coordinates, get_visible_solar_system_objects
 import re
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -85,7 +85,7 @@ db = SQLDatabase(engine)
 schema_brut = db.run("PRAGMA table_info(Celestial);")
 
 sql_tool = create_sql_tool(db)
-tools = [get_ra_dec_constraint, sql_tool]
+tools = [get_ra_dec_constraint, sql_tool, get_visible_solar_system_objects]
 tool_node = ToolNode(tools)
 llm_with_tools = llm_pro.bind_tools(tools)
 
@@ -125,29 +125,36 @@ UNIVERSAL_ASTRONOMER_PROMPT = """Tu es un Assistant Astronome Expert connecté �
 
 *** TA MÉTHODOLOGIE (DYNAMIQUE) ***
 Etape 1 : Analyse la demande.
-Etape 2 : Appelle TOUJOURS 'get_ra_dec_constraint' pour connaître le ciel visible à {city} et l'heure {hour}.
-Etape 3 : Adapte ta stratégie SQL selon le cas :
+Etape 2 : Appelle TOUJOURS 'get_ra_dec_constraint' SAUF POUR LES PLANETES pour connaître le ciel visible à {city} et l'heure {hour}.
+Etape 3 : N'EXECUTE AUCUNE REQUETE SQL SI LE SOLEIL EST VISIBLE (voir erreur renvoyé par get_ra_dec_constraint : "error":)
+Etape 4 : Adapte ta stratégie SQL selon le cas :
 
---- STRATÉGIE A : VISIBILITÉ D'UN OBJET PRÉCIS ---
+--- STRATÉGIE A : VISIBILITÉ D'UNE/PLUSIEURS PLANETES ---
+N'UTILISE PAS la base de données, utilise uniquement l'outil : get_visible_solar_system_objects(lat, long, time)
+
+--- STRATÉGIE B : VISIBILITÉ D'UN OBJET PRÉCIS ---
 (Ex: "Est-ce que M8 est visible ?")
 -> Récupère l'intervalle RA de l'outil 1.
--> SQL : SELECT * FROM Celestial WHERE name = 'M8' AND [Intervalle RA] AND [Constraint Dec]
+-> SQL : SELECT * FROM Celestial WHERE name = 'M8' AND IS_VISIBLE(ra,dec,lat,lst,5)
 
---- STRATÉGIE B : RECOMMANDATION / DÉCOUVERTE ---
+--- STRATÉGIE C : RECOMMANDATION / DÉCOUVERTE ---
 (Ex: "Que puis-je voir de beau ce soir ?", "Les plus belles nébuleuses visibles")
 -> Récupère l'intervalle RA de l'outil 1.
-Utilise l'outil execute_sql. Pour l'argument query, construis une requête SQL valide 
+Si le resultat de l'outil est une erreur lié au soleil n'EXECUTE AUCUNE REQUETE et renvoie l'erreur à l'utilisateur.
+Sinon utilise l'outil execute_sql. Pour l'argument query, construis une requête SQL valide 
 en combinant strictement la contrainte sql_where fournie par l'outil de calcul et tes propres filtres (magnitude, type).
 
---- STRATÉGIE C : CATALOGUE / INFORMATIONS ---
+--- STRATÉGIE D : CATALOGUE / INFORMATIONS ---
 (Ex: "Quels objets sont dans Orion ?", "Donne la liste des galaxies")
 -> Ici, la visibilité n'est pas forcément le critère principal, sauf si précisé.
 -> SQL : SELECT * FROM Celestial WHERE constellation = 'Orion' (Pas besoin de contrainte RA si on ne demande pas si c'est visible maintenant).
 
 *** RÈGLE D'OR ***
+- Quand il est question de planète, INTERDICTION d'utiliser les outils liés au SQL
 - Ne parle PAS avant d'avoir interrogé le SQL.
 - Si le SQL est vide et qu'il est question de visibilité sur les objets Messier/Caldwell, l'objet n'est pas visible.
 - Si le type n'est pas exigé par l'utilisateur inutile de filtrer dessus 
+- Par défaut limite le nombre d'objets renvoyés (5-7) tant que l'utilisateur le précise pas 
 - Effectue le - de requêtes possible 
 
 CONSIGNE DE SORTIE FINALE :
@@ -157,10 +164,11 @@ Lorsque tu as trouvé les informations :
 
   "chat_reply": "Ta réponse ici ...",
   "detected_city": N'invente pas, récupère la ville de l'utilisateur si il l'a évoqué précédemment,
-  "hour": N'invente pas, récupère l'heure voulue par l'utilisateur (Déduis le si il en parle), la forme : "2050-01-01T22:53:00"
+  "hour": N'invente pas, récupère l'heure voulue par l'utilisateur (Déduis le sinon :"ce soir" -> 18h ou 20h), la forme : "2050-01-01T22:53:00" en LOCAL
   "targets": [
     "label": "Nom Objet", "ra": 123.45, "dec": -12.34
   ]
+  "bool_sun" : Boolean si le soleil est présent (basé sur le retour de get_ra_dec_constraint : champ "error")
 
 Si tu n'as pas d'objets à afficher, laisse la liste "targets" vide.
 
@@ -170,7 +178,7 @@ Si tu n'as pas d'objets à afficher, laisse la liste "targets" vide.
 
 VULGARISATION_PROMPT = """ Tu es un agent vulgarisateur d'astronomie ayant des infos vérifiés
 sur les objets Messier/Caldwell, Vulgarise ces données astronomiques pour un débutant en étant très concis sur ce texte 
-(5 phrase maximales) : {last_message} """
+(15 phrase maximales) : {last_message} """
 
 def orchestrateur(state = AgentState):
     infos = state.get("infos")
@@ -229,7 +237,7 @@ def astronomer(state = AgentState):
 
         final_msg = AIMessage(content=chat_reply)
 
-        print("Message : ", final_msg)
+        # print("Message : ", final_msg)
 
         return {
             "messages": [final_msg], 
@@ -251,7 +259,7 @@ def astronomer(state = AgentState):
 def vulgarisation(state = AgentState):
     last_message = state["messages"][-1].content
 
-    print(state.get('final_target'))
+    # print(state.get('final_target'))
 
     prompt = VULGARISATION_PROMPT.format(
             last_message=last_message,
