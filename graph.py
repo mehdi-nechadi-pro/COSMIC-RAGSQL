@@ -1,28 +1,28 @@
+from datetime import datetime
 import json
+import locale
 import os
 import sqlite3
 from typing import Annotated, Any, Dict, List, Optional
 from dotenv import load_dotenv
 from pydantic import Field
-import requests
 from sqlalchemy import create_engine, event
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph
 from langgraph.graph.message import add_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
-from IPython.display import Image, display
 from langchain_community.utilities import SQLDatabase
 from astropy_function import get_ra_dec_constraint, maths_altitude, get_coordinates, get_visible_solar_system_objects
-import re
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.messages import AIMessage
+from prompts import UNIVERSAL_ASTRONOMER_PROMPT, VULGARISATION_PROMPT
 
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 class AgentState(TypedDict):
-    #city: str   # "Lyon", "Paris"
+    city: str   # "Lyon", "Paris"
     hour: str   # "2025-12-30 17:29:45.285278"
     intent: str  # "Observation", "education"
     infos: str  # "Whats the best nebula we can see ?"
@@ -33,15 +33,6 @@ class AgentState(TypedDict):
     latitude: float
     longitude: float
 graph_builder = StateGraph(AgentState)
-
-
-word_observation = ["observe","observation", "voir", "montre", "montres", "trouve"]
-word_data = ["combien", "lesquelles", "lesquels", "liste", "catalogue", "plus grand", "plus loin"]
-
-KEYWORDS = {
-    "observation": ["montr.*", "voi[rt]", "où est", "visib.*", "point.*", "situ.*", "combien", "liste", "quel(s)? est", "plus (grand|loin|brillant)"],
-    "education": ["c'est quoi", "expliqu.*", "pourquoi", "raconte", "histoir.*","qu'est ce"]
-}
 
 llm_pro = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
@@ -54,6 +45,17 @@ llm_lite = ChatGoogleGenerativeAI(
         temperature=0
 )
 
+class RoutingAndExtraction(TypedDict):
+    intent: str     #"observation" ou "education"
+    city: Optional[str]      
+    hour: Optional[str]   
+
+def update_if_valid(current_val, new_val):
+    bad_values = ["null", "Null", "None", "", None]
+    print("APPEL UPDATE -- current=", current_val, " new=", new_val)
+    if new_val in bad_values:
+        return current_val
+    return new_val
 
 def create_sql_tool(db):
     @tool
@@ -95,7 +97,6 @@ def print_clean_debug(step_name, message_object):
     
     print(f"\n--- 🔍 DEBUG {step_name} ---")
     
-    # Cas 1 : Gemini renvoie une liste complexe (Text + Signature)
     if isinstance(content, list):
         full_text = ""
         for block in content:
@@ -103,102 +104,68 @@ def print_clean_debug(step_name, message_object):
                 full_text += block['text']
         print(f"📝 CONTENU : {full_text}")
         
-    # Cas 3 : Appel d'outil (Tool Call)
     if hasattr(message_object, 'tool_calls') and message_object.tool_calls:
         for tool in message_object.tool_calls:
             print(f"🛠️ APPEL OUTIL : {tool['name']} avec args={tool['args']}")
 
     print("-" * 30)
 
-UNIVERSAL_ASTRONOMER_PROMPT = """Tu es un Assistant Astronome Expert connecté à une base de données.
-
-*** TON ENVIRONNEMENT DE DONNÉES ***
-1. TABLE UNIQUE : 'Celestial'
-2. COLONNES IMPORTANTES : 
-   - 'name' (ex: 'M42', 'Andromeda')
-   - 'type' (ex: 'Nebula', 'Galaxy', 'Open Cluster')
-   - 'constellation' (ex: 'Orion', 'Lyra')
-   - 'ra' (Right Ascension, 0-360 degrés)
-   - 'dec' (Declination, -90 à +90 degrés)
-   - 'magnitude' (Luminosité : plus petit = plus brillant. À l'œil nu < 6)
-   - 'catalogue' ('Messier' ou 'Caldwell')
-
-*** TA MÉTHODOLOGIE (DYNAMIQUE) ***
-Etape 1 : Analyse la demande.
-Etape 2 : Appelle TOUJOURS 'get_ra_dec_constraint' SAUF POUR LES PLANETES pour connaître le ciel visible à {city} et l'heure {hour}.
-Etape 3 : N'EXECUTE AUCUNE REQUETE SQL SI LE SOLEIL EST VISIBLE (voir erreur renvoyé par get_ra_dec_constraint : "error":)
-Etape 4 : Adapte ta stratégie SQL selon le cas :
-
---- STRATÉGIE A : VISIBILITÉ D'UNE/PLUSIEURS PLANETES ---
-N'UTILISE PAS la base de données, utilise uniquement l'outil : get_visible_solar_system_objects(lat, long, time)
-
---- STRATÉGIE B : VISIBILITÉ D'UN OBJET PRÉCIS ---
-(Ex: "Est-ce que M8 est visible ?")
--> Récupère l'intervalle RA de l'outil 1.
--> SQL : SELECT * FROM Celestial WHERE name = 'M8' AND IS_VISIBLE(ra,dec,lat,lst,5)
-
---- STRATÉGIE C : RECOMMANDATION / DÉCOUVERTE ---
-(Ex: "Que puis-je voir de beau ce soir ?", "Les plus belles nébuleuses visibles")
--> Récupère l'intervalle RA de l'outil 1.
-Si le resultat de l'outil est une erreur lié au soleil n'EXECUTE AUCUNE REQUETE et renvoie l'erreur à l'utilisateur.
-Sinon utilise l'outil execute_sql. Pour l'argument query, construis une requête SQL valide 
-en combinant strictement la contrainte sql_where fournie par l'outil de calcul et tes propres filtres (magnitude, type).
-
---- STRATÉGIE D : CATALOGUE / INFORMATIONS ---
-(Ex: "Quels objets sont dans Orion ?", "Donne la liste des galaxies")
--> Ici, la visibilité n'est pas forcément le critère principal, sauf si précisé.
--> SQL : SELECT * FROM Celestial WHERE constellation = 'Orion' (Pas besoin de contrainte RA si on ne demande pas si c'est visible maintenant).
-
-*** RÈGLE D'OR ***
-- Quand il est question de planète, INTERDICTION d'utiliser les outils liés au SQL
-- Ne parle PAS avant d'avoir interrogé le SQL.
-- Si le SQL est vide et qu'il est question de visibilité sur les objets Messier/Caldwell, l'objet n'est pas visible.
-- Si le type n'est pas exigé par l'utilisateur inutile de filtrer dessus 
-- Par défaut limite le nombre d'objets renvoyés (5-7) tant que l'utilisateur le précise pas 
-- Effectue le - de requêtes possible 
-
-CONSIGNE DE SORTIE FINALE :
-Lorsque tu as trouvé les informations :
-1. N'utilise PLUS d'outils.
-2. Ta réponse DOIT être un JSON valide, sans balises markdown (pas de ```json), sous cette forme exacte :
-
-  "chat_reply": "Ta réponse ici ...",
-  "detected_city": N'invente pas, récupère la ville de l'utilisateur si il l'a évoqué précédemment,
-  "hour": N'invente pas, récupère l'heure voulue par l'utilisateur (Déduis le sinon :"ce soir" -> 18h ou 20h), la forme : "2050-01-01T22:53:00" en LOCAL
-  "targets": [
-    "label": "Nom Objet", "ra": 123.45, "dec": -12.34
-  ]
-  "bool_sun" : Boolean si le soleil est présent (basé sur le retour de get_ra_dec_constraint : champ "error")
-
-Si tu n'as pas d'objets à afficher, laisse la liste "targets" vide.
-
-*** OBJECTIF ACTUEL DE L'UTILISATEUR ***
-"{mission}"
-"""
-
-VULGARISATION_PROMPT = """ Tu es un agent vulgarisateur d'astronomie ayant des infos vérifiés
-sur les objets Messier/Caldwell, Vulgarise ces données astronomiques pour un débutant en étant très concis sur ce texte 
-(15 phrase maximales) : {last_message} """
-
 def orchestrateur(state = AgentState):
     infos = state.get("infos")
-    query = infos.lower()
-    print("orchestrateur: Message recu -> ", query)
 
-    for word in KEYWORDS["observation"]:
-        if re.search(word, query):
-            print("observation")
-            return {"intent": "observation"}
-    for word in KEYWORDS["education"]:
-        if re.search(word, query):
-            print("education")
-            return {"intent": "education"}
+    structured_llm = llm_lite.with_structured_output(RoutingAndExtraction)
 
+    history = state.get("messages", [])
+    try:
+        locale.setlocale(locale.LC_TIME, 'fr_FR.UTF-8') 
+    except:
+        pass
+    now = datetime.now()
+
+    current_time_str = now.strftime("%Y-%m-%d %H:%M:%S") 
+    current_day_str = now.strftime("%A %d %B %Y")
+    system_msg = {
+        "role": "system", 
+        "content": f"""
+--- CONTEXTE TEMPOREL CRITIQUE ---
+Date et Heure Système Actuelles : {current_time_str}
+Nous sommes le : {current_day_str}
+----------------------------------
+RÈGLE ABSOLUE : Utilise cette date comme référence unique pour "aujourd'hui", "ce soir", "demain".
+NE DEVINE PAS L'ANNÉE. L'année est {now.year}.
+----------------------------------
+Tu es un extracteur astronome.
+Extrais l'intention ("observation" ou "education").
+Extrais l'heure et le lieu SI ils sont donnés.
+INTERDICTION D'HALLUCINER, si une ou plusieurs des valeurs sont non trouvés RENVOIE RIEN
+SI c'est possible de le déduire alors déduis l'heure (matin -> 6h, soir -> 20h) SOUS CE FORMAT: "2050-01-01T22:53:00" en LOCAL
+Sinon renvoie rien. """
+}
+
+    final_message = [system_msg] + history
+    res = structured_llm.invoke(final_message)
+    print(res)
+
+    print("Données de la réponse LLM :", res["intent"], " Ville ? ", res["city"], " Heure ? ", res["hour"])
+
+    final_city = update_if_valid(state.get("detected_city"),res.get("city"))
+    final_hour = update_if_valid(state.get("hour"),res.get("hour"))
+
+    coords, _ = get_coordinates(final_city)
+
+    latitude,longitude = coords
+
+    print("Valeur gardé et envoyé à l'astronomer : ",final_city, " ", final_hour) #" lat=", latitude, " long=", longitude)
+
+    return {"intent": res["intent"],
+            "detected_city": final_city,
+            "hour": final_hour,
+            "latitude": latitude,
+            "longitude": longitude}
 
 def astronomer(state = AgentState):
-
-    # print("Astronomer : ", state)
-
+    # print("Données entrée Astronomer : Heure=",state.get("hour"), " Ville=", 
+    #       state.get("detected_city"), " lat/lon= (", state.get("latitude"), ",", state.get("longitude"))
     history = state.get("messages", [])
 
     system_message = {
@@ -221,51 +188,37 @@ def astronomer(state = AgentState):
         raw_content = "".join([block["text"] for block in raw_content if block.get("type") == "text"])
 
     clean_text = raw_content.replace("```json", "").replace("```", "").strip()
-    hour = state.get("hour")
-    detected_city = state.get("detected_city")
 
     try:
         data = json.loads(clean_text)
 
         final_target = data.get("targets", [])
         chat_reply = data.get("chat_reply", "Voici les résultats.")
-        hour = data.get("hour")
-        detected_city = data.get("detected_city")
-        lat,lon = get_coordinates(detected_city)
-        print("LLM : VILLE =", data.get("detected_city"), " LAT=", lat, " LON=", lon)
-
-
+    
         final_msg = AIMessage(content=chat_reply)
-
-        # print("Message : ", final_msg)
-
+        
         return {
             "messages": [final_msg], 
             "final_target": final_target,
-            "detected_city": detected_city,
-            "latitude": lat,
-            "longitude": lon,
-            "hour": hour
         }
 
     except json.JSONDecodeError:
         return {
             "messages": [res], 
             "final_target": [],
-            "detected_city": detected_city,
-            "hour": hour
         }
 
 def vulgarisation(state = AgentState):
     last_message = state["messages"][-1].content
-
-    # print(state.get('final_target'))
 
     prompt = VULGARISATION_PROMPT.format(
             last_message=last_message,
         )
 
     res = llm_lite.invoke(prompt)
+
+    # print("Données dans vulga : Heure=",state.get("hour"), " Ville=", 
+    #       state.get("detected_city"), " lat/lon= (", state.get("latitude"), ",", state.get("longitude"))
 
     return {"vulgarisation_output": res.content}
 
@@ -278,8 +231,6 @@ def orchestr_switch(state = AgentState):
 
 dict_ = {'astronome':'astro', 'vulgaris':'vulga'}
 
-
-
 graph_builder.add_node("orchest", orchestrateur)
 graph_builder.add_node("astro", astronomer)
 graph_builder.add_node("tools", tool_node)
@@ -291,6 +242,5 @@ graph_builder.add_conditional_edges("astro", tools_condition, {"tools": "tools",
 
 graph_builder.add_edge("tools", "astro")
 graph_builder.set_finish_point("vulga")
-
 
 graph = graph_builder.compile()

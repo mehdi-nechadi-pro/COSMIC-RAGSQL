@@ -15,16 +15,21 @@ geolocator = Nominatim(user_agent="mon_astro_app_v1")
 
 @lru_cache(maxsize=128)
 def get_coordinates(city_name: str):
-    # print("Get Coords : ", city_name)
+    print("Get Coords : ", city_name)
     """
-    Prend un nom de ville (ex: 'Lyon') et renvoie (lat, lon).
+    Prend un nom de ville (ex: 'Lyon') et renvoie (lat, lon) et la timezone.
     Renvoie None si introuvable.
     """
     try:
         location = geolocator.geocode(city_name)
-        if location:
-            return location.latitude, location.longitude
-        return None
+        if not location:            
+            return None, "UTC"
+        
+        lat = location.latitude
+        lon = location.longitude
+        tz_str = tf.timezone_at(lng=lon, lat=lat) or "UTC"
+        return (lat, lon), tz_str
+    
     except Exception as e:
         print(f"Erreur Geocoding : {e}")
         return None
@@ -46,12 +51,10 @@ def format_utc_to_local_display(city: str, utc_dt: datetime) -> str:
     if utc_dt.tzinfo is None:
         utc_dt = pytz.utc.localize(utc_dt)
 
-    coords = get_coordinates(city)
+    coords, tz_str = get_coordinates(city)
     if not coords:
         return utc_dt.strftime("%Y-%m-%d %H:%M:%S") + " (UTC)" # Fallback
-    
-    lat, lon = coords
-    tz_str = tf.timezone_at(lng=lon, lat=lat)
+
     target_tz = pytz.timezone(tz_str) if tz_str else pytz.utc
     
     local_dt = utc_dt.astimezone(target_tz)
@@ -73,12 +76,10 @@ def get_target_utc_date(city: str, user_input_str: str = "") -> datetime:
         return now_utc
 
     # Récupération Timezone Cible
-    coords = get_coordinates(city)
+    coords, tz_str = get_coordinates(city)
     if not coords:
         target_tz = pytz.utc
     else:
-        lat, lon = coords
-        tz_str = tf.timezone_at(lng=lon, lat=lat)
         target_tz = pytz.timezone(tz_str) if tz_str else pytz.utc
 
     # Le Default Context (Date du jour LOCALE)
@@ -141,7 +142,7 @@ def get_ra_dec_constraint(city: str, time_input: str = "") -> str:
         city: Le nom de la ville (ex: 'Lyon').
         time_input: L'heure au format 'YYYY-MM-DD HH:MM:SS'.
     """
-    coords = get_coordinates(city)
+    coords, _ = get_coordinates(city)
 
     if not coords:
         return {"is_daytime": False, "observables": [], "error": f"City '{city}' not found"}
@@ -190,7 +191,7 @@ def get_visible_solar_system_objects(city: str, time_str: str):
     time_str: L'heure au format 'YYYY-MM-DD HH:MM:SS'
     """
 
-    coords = get_coordinates(city)
+    coords, _ = get_coordinates(city)
 
     if not coords:
         return {"is_daytime": False, "observables": [], "error": f"City '{city}' not found"}

@@ -1,0 +1,186 @@
+
+        /* --- 1. CONFIGURATION GLOBALE --- */
+        body { 
+            margin: 0; padding: 0; 
+            display: flex; 
+            height: 100vh; 
+            background: #0b0b0b; 
+            color: white; 
+            font-family: sans-serif; 
+            overflow: hidden; 
+            position: relative;
+        }
+
+        /* --- 2. SIDEBAR (DESIGN MODERNE) --- */
+        #sidebar {
+            width: 40%;
+            display: flex;
+            flex-direction: column;
+            background: #121212;
+            border-right: 1px solid #2a2a2a;
+            /* Animation fluide */
+            transition: width 0.6s cubic-bezier(0.25, 1, 0.5, 1);
+            z-index: 10;
+            box-shadow: 5px 0 15px rgba(0,0,0,0.3);
+        }
+
+        /* Header (Logo + Titre) */
+        .app-header {
+            padding: 20px;
+            border-bottom: 1px solid #2a2a2a;
+            background: rgba(30, 30, 30, 0.5);
+            backdrop-filter: blur(10px);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .logo-container {
+            text-decoration: none;
+            background: linear-gradient(135deg, #0056b3, #00a8ff);
+            width: 45px; height: 45px;
+            border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 24px;
+            box-shadow: 0 4px 10px rgba(0, 86, 179, 0.3);
+        }
+        
+        .app-info h2 { margin: 0; font-size: 18px; color: white; letter-spacing: 0.5px; }
+        .app-info p { margin: 0; font-size: 12px; color: #888; }
+
+        /* Zone de Chat */
+        #chat-history {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            scrollbar-width: thin;
+            scrollbar-color: #333 transparent;
+        }
+
+        /* Bulles */
+        .msg { 
+            padding: 12px 16px; 
+            border-radius: 18px; 
+            max-width: 85%; 
+            line-height: 1.5; 
+            font-size: 14px; 
+            position: relative;
+            animation: fadeIn 0.3s ease;
+        }
+        .user { background: #0056b3; align-self: flex-end; color: white; border-bottom-right-radius: 4px; }
+        .bot { background: #252525; align-self: flex-start; color: #e0e0e0; border: 1px solid #333; border-bottom-left-radius: 4px; }
+
+        /* Zone Input */
+        #input-area {
+            padding: 20px;
+            background: #121212;
+            border-top: 1px solid #2a2a2a;
+        }
+
+        .input-wrapper {
+            display: flex; background: #1e1e1e; border-radius: 25px; padding: 5px 10px; border: 1px solid #333; transition: border-color 0.3s;
+        }
+        .input-wrapper:focus-within { border-color: #0056b3; }
+        input { flex: 1; padding: 12px; border: none; background: transparent; color: white; outline: none; font-size: 14px; }
+        #input-area button { background: transparent; color: #0056b3; border: none; padding: 8px 15px; cursor: pointer; transition: transform 0.2s, color 0.2s; display: flex; align-items: center; }
+        #input-area button:hover { color: #4dabf7; transform: translateX(3px); }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* --- 3. MAP CONTAINER --- */
+        #map-container { 
+            width: 60%; 
+            height: 100%; 
+            position: relative; 
+            transition: width 0.6s cubic-bezier(0.25, 1, 0.5, 1), opacity 0.3s ease;
+            overflow: hidden;
+        }
+
+        #starmap { 
+            width: 100%; 
+            height: 100%;
+            min-width: 70vw; 
+        }
+
+        /* --- 4. LE BOUTON SLIDE --- */
+        #toggleMapBtn {
+            position: absolute;
+            top: 50%;
+            left: 40%; 
+            transform: translate(-50%, -50%);
+            z-index: 100; /* Toujours au dessus */
+            width: 40px; 
+            height: 40px;
+            border-radius: 50%;
+            background: #0056b3;
+            color: white;
+            border: 2px solid #121212;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px;
+            transition: left 0.6s cubic-bezier(0.25, 1, 0.5, 1), transform 0.4s ease;
+            box-shadow: 0 0 15px rgba(0,0,0,0.5);
+        }
+        #toggleMapBtn:hover { transform: translate(-50%, -50%) scale(1.15); }
+
+        body.map-closed #sidebar { width: 100%; }
+        body.map-closed #map-container { width: 0%; opacity: 0; }
+        body.map-closed #toggleMapBtn { 
+            left: 100%; 
+            transform: translate(-140%, -50%) rotate(180deg); 
+        }
+
+        #pollution-controls {
+                position: absolute;
+                top: 30px;        /* Un peu de marge en bas */
+                left: 50%;
+                transform: translateX(-50%);
+                z-index: 50;
+                
+                background: rgba(0, 0, 0, 0.6); 
+                backdrop-filter: blur(4px);
+                padding: 8px 16px;
+                border-radius: 30px;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                white-space: nowrap; /* Empêche les boutons de passer à la ligne */
+            }
+
+            .label-vue {
+                color: rgba(255, 255, 255, 0.6);
+                font-size: 0.85em;
+                text-transform: uppercase;
+                font-weight: 700;
+                margin-right: 5px;
+                font-family: sans-serif;
+            }
+
+            .btn-astro {
+                background: transparent;
+                color: rgba(255, 255, 255, 0.8);
+                border: 1px solid transparent;
+                padding: 6px 12px;
+                border-radius: 20px;
+                cursor: pointer;
+                font-size: 0.9rem;
+                transition: all 0.3s ease;
+                font-family: sans-serif;
+            }
+
+            .btn-astro:hover {
+                background: rgba(255, 255, 255, 0.1);
+                color: white;
+            }
+
+            .btn-astro.active {
+                background: rgba(255, 255, 255, 0.9);
+                color: #000;
+                font-weight: bold;
+                box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+            }

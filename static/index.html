@@ -3,146 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <title>AstroChat</title>
-    <script src="/static/jquery.min.js"></script>
-    <script src="/static/virtualsky.js"></script>
-    <style>
-        /* --- 1. CONFIGURATION GLOBALE --- */
-        body { 
-            margin: 0; padding: 0; 
-            display: flex; 
-            height: 100vh; 
-            background: #0b0b0b; 
-            color: white; 
-            font-family: sans-serif; 
-            overflow: hidden; 
-            position: relative;
-        }
-
-        /* --- 2. SIDEBAR (DESIGN MODERNE) --- */
-        #sidebar {
-            width: 40%;
-            display: flex;
-            flex-direction: column;
-            background: #121212;
-            border-right: 1px solid #2a2a2a;
-            /* Animation fluide */
-            transition: width 0.6s cubic-bezier(0.25, 1, 0.5, 1);
-            z-index: 10;
-            box-shadow: 5px 0 15px rgba(0,0,0,0.3);
-        }
-
-        /* Header (Logo + Titre) */
-        .app-header {
-            padding: 20px;
-            border-bottom: 1px solid #2a2a2a;
-            background: rgba(30, 30, 30, 0.5);
-            backdrop-filter: blur(10px);
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-
-        .logo-container {
-            text-decoration: none;
-            background: linear-gradient(135deg, #0056b3, #00a8ff);
-            width: 45px; height: 45px;
-            border-radius: 12px;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 24px;
-            box-shadow: 0 4px 10px rgba(0, 86, 179, 0.3);
-        }
-        
-        .app-info h2 { margin: 0; font-size: 18px; color: white; letter-spacing: 0.5px; }
-        .app-info p { margin: 0; font-size: 12px; color: #888; }
-
-        /* Zone de Chat */
-        #chat-history {
-            flex: 1;
-            padding: 20px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            scrollbar-width: thin;
-            scrollbar-color: #333 transparent;
-        }
-
-        /* Bulles */
-        .msg { 
-            padding: 12px 16px; 
-            border-radius: 18px; 
-            max-width: 85%; 
-            line-height: 1.5; 
-            font-size: 14px; 
-            position: relative;
-            animation: fadeIn 0.3s ease;
-        }
-        .user { background: #0056b3; align-self: flex-end; color: white; border-bottom-right-radius: 4px; }
-        .bot { background: #252525; align-self: flex-start; color: #e0e0e0; border: 1px solid #333; border-bottom-left-radius: 4px; }
-
-        /* Zone Input */
-        #input-area {
-            padding: 20px;
-            background: #121212;
-            border-top: 1px solid #2a2a2a;
-        }
-
-        .input-wrapper {
-            display: flex; background: #1e1e1e; border-radius: 25px; padding: 5px 10px; border: 1px solid #333; transition: border-color 0.3s;
-        }
-        .input-wrapper:focus-within { border-color: #0056b3; }
-        input { flex: 1; padding: 12px; border: none; background: transparent; color: white; outline: none; font-size: 14px; }
-        #input-area button { background: transparent; color: #0056b3; border: none; padding: 8px 15px; cursor: pointer; transition: transform 0.2s, color 0.2s; display: flex; align-items: center; }
-        #input-area button:hover { color: #4dabf7; transform: translateX(3px); }
-
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-
-        /* --- 3. MAP CONTAINER --- */
-        #map-container { 
-            width: 60%; 
-            height: 100%; 
-            position: relative; 
-            transition: width 0.6s cubic-bezier(0.25, 1, 0.5, 1), opacity 0.3s ease;
-            overflow: hidden;
-        }
-
-        #starmap { 
-            width: 100%; 
-            height: 100%;
-            min-width: 70vw; 
-        }
-
-        /* --- 4. LE BOUTON SLIDE --- */
-        #toggleMapBtn {
-            position: absolute;
-            top: 50%;
-            left: 40%; 
-            transform: translate(-50%, -50%);
-            z-index: 100; /* Toujours au dessus */
-            width: 40px; 
-            height: 40px;
-            border-radius: 50%;
-            background: #0056b3;
-            color: white;
-            border: 2px solid #121212;
-            cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 16px;
-            transition: left 0.6s cubic-bezier(0.25, 1, 0.5, 1), transform 0.4s ease;
-            box-shadow: 0 0 15px rgba(0,0,0,0.5);
-        }
-        #toggleMapBtn:hover { transform: translate(-50%, -50%) scale(1.15); }
-
-        /* --- 5. ETAT FERMÉ (Correction Typo et Logique) --- */
-        /* J'ai corrigé "body.map-" en "body.map-closed" */
-        body.map-closed #sidebar { width: 100%; }
-        body.map-closed #map-container { width: 0%; opacity: 0; }
-        body.map-closed #toggleMapBtn { 
-            left: 100%; 
-            transform: translate(-140%, -50%) rotate(180deg); 
-        }
-
-    </style>
+    <script src="/static/js_virtualsky/jquery.min.js"></script>
+    <script src="/static/js_virtualsky/app.js"></script>
+    <script src="/static/js_virtualsky/virtualsky.js"></script>
+    <link rel="stylesheet" href="static/css/style.css">
 </head>
 <body class="map-closed">
 
@@ -175,128 +39,20 @@
     </div>
 
     <div id="map-container">
-        <div id="starmap"></div>
+    
+    <div id="starmap"></div>
+
+    <div id="pollution-controls">
+        <span class="label-vue">Vue :</span>
+        <button onclick="changeView('city', this)" class="btn-astro">🏙️ Ville</button>
+        <button onclick="changeView('hybrid', this)" class="btn-astro active">🏡 Standard</button>
+        <button onclick="changeView('dark', this)" class="btn-astro">✨ Plein Ciel</button>
+        <button id="btn-constellation" onclick="toggleConstellation(this)" class="btn-astro active"> ♈ Constellations </button>
     </div>
 
+</div>
     <button id="toggleMapBtn" onclick="toggleMap()">➤</button>
 
-    <script>
-        var planetarium;
-        let currentUserState = {
-            lat: 48.8566, long: 2.3522, hour: new Date().toISOString(), city: "Localisation inconnue"
-        };
-
-        // --- FONCTION CREATE MAP ---
-        function createMap(startRA, startDEC, fovVal, lat, long, hourString) {
-            let dateObj = new Date(hourString);
-            $('#starmap').empty();
-            planetarium = $.virtualsky({
-                id: 'starmap',
-                projection: 'stereo',
-                ground: true,
-                atmosphere: true,
-                constellations: true,
-                cardinalpoints: true,
-                planets: true,
-                latitude: parseFloat(lat),
-                longitude: parseFloat(long),
-                lang: 'fr',
-                clock: dateObj,
-                ra: startRA,
-                dec: startDEC,
-                fov: fovVal || 100,
-                live: false
-            });
-        }
-
-        async function sendChat() {
-            var inputField = document.getElementById("userMsg");
-            var text = inputField.value.trim();
-            if (!text) return;
-
-            addMessage(text, "user");
-            inputField.value = "";
-            addMessage("Recherche en cours...", "bot temporary");
-
-            try {
-                const response = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        message: text, 
-                        city: currentUserState.city, 
-                        hour: currentUserState.hour, 
-                        latitude: currentUserState.lat, 
-                        longitude: currentUserState.long
-                    })
-                });
-
-                const data = await response.json();
-                document.querySelector(".temporary")?.remove();
-                addMessage(data.reply, "bot");
-
-                if (data.detected_city) currentUserState.city = data.detected_city;
-                if (data.hour) currentUserState.hour = data.hour;
-                if (data.latitude) currentUserState.lat = data.latitude;
-                if (data.longitude) currentUserState.long = data.longitude;
-
-                var targets = data.targets;
-                if (targets && targets.length > 0) {
-                    var first = targets[0];
-                    createMap(parseFloat(first.ra), parseFloat(first.dec), 45, parseFloat(data.latitude), parseFloat(data.longitude), data.hour);
-                    targets.forEach(obj => {
-                        planetarium.addPointer({
-                            ra: parseFloat(obj.ra), dec: parseFloat(obj.dec), label: obj.label, colour: 'orange', r: 15
-                        });
-                    })
-                        
-                } else {
-                    createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
-                }
-
-                // OPTIONNEL : Ouvrir la map automatiquement quand on reçoit une réponse avec des cibles
-                // if (targets && targets.length > 0) {
-                //    document.body.classList.remove('map-closed');
-                //    setTimeout(() => { if (planetarium) planetarium.resize(); }, 600);
-                // }
-
-            } catch (error) {
-                console.error(error);
-                document.querySelector(".temporary")?.remove();
-                addMessage("Erreur : " + error, "bot");
-            }
-        }
-
-        function addMessage(text, className) {
-            var chatDiv = document.getElementById("chat-history");
-            var msgDiv = document.createElement("div");
-            msgDiv.className = "msg " + className;
-            msgDiv.innerHTML = text; 
-            chatDiv.appendChild(msgDiv);
-            chatDiv.scrollTop = chatDiv.scrollHeight;
-        }
-
-        function toggleMap() {
-            document.body.classList.toggle('map-closed');
-            setTimeout(() => { if (planetarium) planetarium.resize(); }, 600);
-        }
-
-        $(document).ready(function() {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
-                    (position) => {
-                        currentUserState.lat = position.coords.latitude;
-                        currentUserState.long = position.coords.longitude;
-                        createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
-                    }, 
-                    (error) => {
-                        createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
-                    }
-                );
-            } else {
-                createMap(180, 0, 90, currentUserState.lat, currentUserState.long, currentUserState.hour);
-            }
-        });
-    </script>
 </body>
+
 </html>
