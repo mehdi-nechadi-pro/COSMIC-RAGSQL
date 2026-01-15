@@ -5,14 +5,14 @@ import os
 import sqlite3
 from typing import Annotated, Any, Dict, List, Optional
 from dotenv import load_dotenv
-from pydantic import Field
+from pydantic import Field, BaseModel
 from sqlalchemy import create_engine, event
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph
 from langgraph.graph.message import add_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.utilities import SQLDatabase
-from astropy_function import get_ra_dec_constraint, maths_altitude, get_coordinates, get_visible_solar_system_objects
+from astropy_function import get_ra_dec_constraint, get_target_utc_date, maths_altitude, get_coordinates, get_visible_solar_system_objects
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.messages import AIMessage
@@ -32,6 +32,9 @@ class AgentState(TypedDict):
     detected_city: Optional[str] = Field(description="Nom de la ville demandée par l'user, si différente de l'actuelle.")
     latitude: float
     longitude: float
+    sql_where: str
+    planets: str
+    timezone: str
 graph_builder = StateGraph(AgentState)
 
 llm_pro = ChatGoogleGenerativeAI(
@@ -45,10 +48,10 @@ llm_lite = ChatGoogleGenerativeAI(
         temperature=0
 )
 
-class RoutingAndExtraction(TypedDict):
+class RoutingAndExtraction(BaseModel):
     intent: str     #"observation" ou "education"
-    city: Optional[str]      
-    hour: Optional[str]   
+    city: Optional[str] = Field(None)     
+    hour: Optional[str] = Field(None) 
 
 def update_if_valid(current_val, new_val):
     bad_values = ["null", "Null", "None", "", None]
@@ -65,7 +68,6 @@ def create_sql_tool(db):
         Prend en entrée une requête SQL valide et renvoie les résultats formatés.
         """
         try:
-            # db.run() s'occupe de tout : exécution et formatage en texte
             return db.run(query)
         except Exception as e:
             return f"Erreur lors de l'exécution SQL : {e}"
@@ -87,7 +89,7 @@ db = SQLDatabase(engine)
 schema_brut = db.run("PRAGMA table_info(Celestial);")
 
 sql_tool = create_sql_tool(db)
-tools = [get_ra_dec_constraint, sql_tool, get_visible_solar_system_objects]
+tools = [sql_tool]
 tool_node = ToolNode(tools)
 llm_with_tools = llm_pro.bind_tools(tools)
 
@@ -111,7 +113,6 @@ def print_clean_debug(step_name, message_object):
     print("-" * 30)
 
 def orchestrateur(state = AgentState):
-    infos = state.get("infos")
 
     structured_llm = llm_lite.with_structured_output(RoutingAndExtraction)
 
@@ -124,48 +125,60 @@ def orchestrateur(state = AgentState):
 
     current_time_str = now.strftime("%Y-%m-%d %H:%M:%S") 
     current_day_str = now.strftime("%A %d %B %Y")
+    city = state.get("detected_city")
+
     system_msg = {
         "role": "system", 
         "content": f"""
 --- CONTEXTE TEMPOREL CRITIQUE ---
 Date et Heure Système Actuelles : {current_time_str}
 Nous sommes le : {current_day_str}
+Ville actuellement connue par le système : {city}
 ----------------------------------
 RÈGLE ABSOLUE : Utilise cette date comme référence unique pour "aujourd'hui", "ce soir", "demain".
+MODIFIE LA VILLE UNIQUEMENT si elle est donnée dans le prompt
 NE DEVINE PAS L'ANNÉE. L'année est {now.year}.
+NE TOUCHES PAS AUX FUSEAUX HORAIRES, l'utilisateur demande 18h -> tu renvoies 18h
 ----------------------------------
 Tu es un extracteur astronome.
 Extrais l'intention ("observation" ou "education").
 Extrais l'heure et le lieu SI ils sont donnés.
 INTERDICTION D'HALLUCINER, si une ou plusieurs des valeurs sont non trouvés RENVOIE RIEN
-SI c'est possible de le déduire alors déduis l'heure (matin -> 6h, soir -> 20h) SOUS CE FORMAT: "2050-01-01T22:53:00" en LOCAL
+SI C'EST de le déduire alors déduis l'heure (matin -> 6h, soir -> 20h) SOUS CE FORMAT: "2050-01-01T22:53:00" en LOCAL, AUCUNE CONVERSION AUTORISEE
 Sinon renvoie rien. """
 }
 
     final_message = [system_msg] + history
     res = structured_llm.invoke(final_message)
-    print(res)
 
-    print("Données de la réponse LLM :", res["intent"], " Ville ? ", res["city"], " Heure ? ", res["hour"])
+    print("Données de la réponse LLM :", res.intent, " Ville ? ", res.city, " Heure ? ", res.hour)
 
-    final_city = update_if_valid(state.get("detected_city"),res.get("city"))
-    final_hour = update_if_valid(state.get("hour"),res.get("hour"))
-
-    coords, _ = get_coordinates(final_city)
-
+    # ALL datas are available for the computation 
+    final_city = update_if_valid(state.get("detected_city"),res.city)
+    final_hour = update_if_valid(state.get("hour"),res.hour)
+    coords, timezone = get_coordinates(final_city)
     latitude,longitude = coords
+    final_utc = get_target_utc_date(timezone, final_hour)
 
-    print("Valeur gardé et envoyé à l'astronomer : ",final_city, " ", final_hour) #" lat=", latitude, " long=", longitude)
+    # print("Valeur gardé et envoyé à l'astronomer : ",final_city, " ", final_hour, "utc : ", final_utc)
 
-    return {"intent": res["intent"],
+    constraint = get_ra_dec_constraint(latitude, longitude, final_utc)
+    planets = get_visible_solar_system_objects(latitude, longitude, final_utc)
+
+    # print("Contrainte stockée dans sql_where : ", constraint)
+
+    return {"intent": res.intent,
             "detected_city": final_city,
-            "hour": final_hour,
+            "hour": final_utc,
             "latitude": latitude,
-            "longitude": longitude}
+            "longitude": longitude,
+            "sql_where": constraint,
+            "planets": planets,
+            "timezone" : timezone}
 
 def astronomer(state = AgentState):
     # print("Données entrée Astronomer : Heure=",state.get("hour"), " Ville=", 
-    #       state.get("detected_city"), " lat/lon= (", state.get("latitude"), ",", state.get("longitude"))
+    state.get("detected_city"), " lat/lon= (", state.get("latitude"), ",", state.get("longitude"), ")"
     history = state.get("messages", [])
 
     system_message = {
@@ -174,13 +187,15 @@ def astronomer(state = AgentState):
             schema=schema_brut,
             city=state.get("detected_city"),
             hour=state.get("hour"),
-            mission=state.get("infos")
+            mission=state.get("infos"),
+            sql_where = state.get("sql_where"),
+            planets= state.get("planets")
         )
     }
     final_message = [system_message] + history
 
     res = llm_with_tools.invoke(final_message)
-    print_clean_debug("Astro", res)
+    # print_clean_debug("Astro", res)
     raw_content = res.content
     
     #----------- PARSING JSON ------------#
@@ -218,7 +233,7 @@ def vulgarisation(state = AgentState):
     res = llm_lite.invoke(prompt)
 
     # print("Données dans vulga : Heure=",state.get("hour"), " Ville=", 
-    #       state.get("detected_city"), " lat/lon= (", state.get("latitude"), ",", state.get("longitude"))
+    state.get("detected_city"), " lat/lon= (", state.get("latitude"), ",", state.get("longitude")
 
     return {"vulgarisation_output": res.content}
 

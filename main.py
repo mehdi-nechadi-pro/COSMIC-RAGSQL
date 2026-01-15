@@ -1,11 +1,10 @@
-import sys
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from langchain_core.messages import HumanMessage
 from geopy.geocoders import Nominatim
-from astropy_function import get_target_utc_date, format_utc_to_local_display
+from astropy_function import format_utc_to_local
+from graph import graph
 
 geolocator = Nominatim(user_agent="mon_astro_app_v1")
 
@@ -17,26 +16,17 @@ def get_city_from_latlon(lat, lon):
     except:
         return None
 
-# --- IMPORT DU CERVEAU ---
-# On part du principe que ton fichier s'appelle graph.py
-try:
-    from graph import graph
-except ImportError:
-    print("⚠️ ERREUR CRITIQUE : Impossible d'importer 'graph' depuis 'graph.py'")
-    graph = None
 
 app = FastAPI()
 
-# Servir les fichiers statiques (JS, CSS, HTML)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-class UserRequest(BaseModel): # Verification Typage et Init qui sera envoyé juste en bas
+class UserRequest(BaseModel): 
     message: str
     city: str
     hour: str 
     latitude: float
     longitude: float
-
 
 @app.get("/")
 async def read_index():
@@ -46,48 +36,39 @@ async def read_index():
 async def chat_endpoint(request: UserRequest):
     print(f"📩 Message reçu : {request.message}")
 
-    if not graph:
-        return {"reply": "Erreur : Le graphe n'est pas chargé côté serveur.", "targets": []}
-    
-    print("HEURE DONNE DES LE DEBUT : ", request.hour)
-
     detected_city = get_city_from_latlon(request.latitude, request.longitude)
 
-    try:
-        initial_local_hour = format_utc_to_local_display(detected_city, request.hour)
-    except Exception as e:
-        print(f"⚠️ Erreur conversion init: {e}")
-        initial_local_hour = request.hour
+    print("Heure donnée par le front : ", request.hour, " et ville : ", detected_city)
 
-    # 1. Préparer l'état pour LangGraph
+    # Initial state for the graph
     initial_state = {
         "infos": request.message,
         "latitude": request.latitude,
         "longitude": request.longitude,
-        "hour": initial_local_hour,
+        "hour": request.hour,
         "final_target": [],
         "messages": [("user", request.message)] ,
-        "detected_city": get_city_from_latlon(request.latitude, request.longitude)
+        "detected_city": detected_city
     }
 
-
-    # 2. Lancer l'IA
     try:
+        # Graph Call
         result = graph.invoke(initial_state)
         
-        # 3. Récupérer les résultats
+        # Get Results from the graph response
         reply = result.get("vulgarisation_output", "Pas de réponse générée.")
         targets = result.get("final_target", [])
         latitude = result.get("latitude")
         longitude = result.get("longitude")
         hour = result.get("hour")
         detected_city = result.get("detected_city")
+        timezone = result.get("timezone")
 
-        print("🔥 RESULTATS BACKEND OBTENUS : Ville detectée= ", detected_city, "Heure : ", hour ," Latitude= ", latitude, " Longitude= ", longitude)
+        final_local_hour_str = format_utc_to_local(detected_city, hour, timezone) # obligé d'envoyer en local sinon le LLM comprends rien
 
-        dt_utc = get_target_utc_date(detected_city, result.get("hour"))
-        final_local_hour_str = format_utc_to_local_display(detected_city, dt_utc)
+        print("🔥 Résultats données par le (graph) : Ville detectée= ", detected_city, "Heure UTC : ", hour ," Latitude= ", latitude, " Longitude= ", longitude)
 
+        # Return result to the front-end
         return {
             "reply": reply,
             "targets": targets,

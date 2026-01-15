@@ -1,11 +1,9 @@
 from datetime import datetime
 from astropy import units as u
-import sqlite3
 from geopy.geocoders import Nominatim
 from astropy.coordinates import EarthLocation, get_sun, AltAz, solar_system_ephemeris, get_body
 from astropy.time import Time
 from dateutil import parser
-from langchain_core.tools import tool
 import math
 from timezonefinder import TimezoneFinder
 import pytz
@@ -36,9 +34,9 @@ def get_coordinates(city_name: str):
 
 tf = TimezoneFinder()
 
-def format_utc_to_local_display(city: str, utc_dt: datetime) -> str:
+def format_utc_to_local(city: str, utc_dt: datetime, tz_str= None) -> str:
     """
-    Prend une date UTC et une ville, et renvoie l'heure locale formatée pour l'affichage.
+    Prend une date UTC et une ville et une timezone, et renvoie l'heure locale formatée pour le front-end.
     Ex: 2026-01-04 19:15 UTC -> "2026-01-04 20:15:00" (si Paris)
     """
 
@@ -51,10 +49,11 @@ def format_utc_to_local_display(city: str, utc_dt: datetime) -> str:
     if utc_dt.tzinfo is None:
         utc_dt = pytz.utc.localize(utc_dt)
 
-    coords, tz_str = get_coordinates(city)
-    if not coords:
-        return utc_dt.strftime("%Y-%m-%d %H:%M:%S") + " (UTC)" # Fallback
-
+    if(tz_str is None):
+        coords, tz_str = get_coordinates(city)
+        if not coords:
+            return utc_dt.strftime("%Y-%m-%d %H:%M:%S") + " (UTC)" # Fallback
+    
     target_tz = pytz.timezone(tz_str) if tz_str else pytz.utc
     
     local_dt = utc_dt.astimezone(target_tz)
@@ -63,39 +62,27 @@ def format_utc_to_local_display(city: str, utc_dt: datetime) -> str:
     
     return local_dt.isoformat()
 
-def get_target_utc_date(city: str, user_input_str: str = "") -> datetime:
+def get_target_utc_date(timezone, user_input_str: str = "") -> datetime:
     """
-    Transforme l'input du LLM en UTC.
-    - Si input vide -> DateTime.now(UTC)
-    - Si input avec 'Z' -> Respecte UTC
-    - Si input sans 'Z' -> Applique le fuseau de la ville (Local)
+    Transforme l'input du LLM en UTC grâce à l'heure locale et la timezone
     """
     now_utc = datetime.now(pytz.utc)
 
     if not user_input_str or user_input_str.strip() == "":
         return now_utc
 
-    # Récupération Timezone Cible
-    coords, tz_str = get_coordinates(city)
-    if not coords:
-        target_tz = pytz.utc
-    else:
-        target_tz = pytz.timezone(tz_str) if tz_str else pytz.utc
+    target_tz = pytz.timezone(timezone) if timezone else pytz.utc
 
-    # Le Default Context (Date du jour LOCALE)
     default_dt = now_utc.astimezone(target_tz)
 
     try:
         clean_str = user_input_str.strip()
-        
-        # Le parser de dateutil est capable de voir le "Z" ou "+00:00"
+
         parsed = parser.parse(clean_str, default=default_dt)
-        
-        # CAS A : Le LLM a envoyé un format avec Timezone (ex: "2026...Z")
+
         if parsed.tzinfo is not None and parsed.tzinfo.utcoffset(parsed) is not None:
             final_utc = parsed.astimezone(pytz.utc)
 
-        # CAS B : Le LLM a envoyé une date naïve (ex: "21:00" ou "2026... 20:48")
         else:
             local_dt = target_tz.localize(parsed)
             final_utc = local_dt.astimezone(pytz.utc)
@@ -104,7 +91,7 @@ def get_target_utc_date(city: str, user_input_str: str = "") -> datetime:
         print(f"🔥 Erreur parsing '{user_input_str}', fallback NOW.")
         final_utc = now_utc
     
-    print("Get Target UTC (", city, ",",user_input_str,  ": LOCAL) -> ",final_utc ," ")
+    print("Get Target UTC (" ",",user_input_str,  ": LOCAL) -> ",final_utc ," ")
     return final_utc
 
 def maths_altitude(ra, dec, lat, lst, min_alt=0):
@@ -127,31 +114,18 @@ def maths_altitude(ra, dec, lat, lst, min_alt=0):
         return 1 if sin_alt > limit else 0
     except:
         return 0
-    
-con = sqlite3.connect("Celestial.db")
-cur = con.cursor()
-con.create_function("IS_VISIBLE", 5, maths_altitude) 
-cur = con.cursor()
 
-@tool
-def get_ra_dec_constraint(city: str, time_input: str = "") -> str:
+def get_ra_dec_constraint(lat: float, lon: float, time_utc: str = "") -> str:
     """
     Calcule les contraintes d'Ascension Droite (RA) et de Déclinaison (DEC) 
     pour une ville et une heure données.
     Args:
-        city: Le nom de la ville (ex: 'Lyon').
-        time_input: L'heure au format 'YYYY-MM-DD HH:MM:SS'.
+        lat: La latitude
+        lon: La longitude
+        time_utc: L'heure au format UTC
     """
-    coords, _ = get_coordinates(city)
 
-    if not coords:
-        return {"is_daytime": False, "observables": [], "error": f"City '{city}' not found"}
-    
-    lat,lon = coords
-    time_utc = get_target_utc_date(city, time_input)
     observation_time = Time(time_utc)
-
-    # print("LIEU : ", city, " HEURE UTC : ", observation_time)
 
     location = EarthLocation(lat=lat*u.deg, lon=lon*u.deg)
 
@@ -163,7 +137,7 @@ def get_ra_dec_constraint(city: str, time_input: str = "") -> str:
     sun_altaz = sun.transform_to(AltAz(obstime=observation_time, location=location))
     sun_altitude = sun_altaz.alt.degree
     print (sun_altitude)
-    if sun_altitude > -6:
+    if sun_altitude > -18: # crepuscule astronomiquea
         # print("SUN IS THERE")
         return {
             "error": f"The sun is at altitude={sun_altitude}, so nothing except it can be seen",
@@ -179,8 +153,8 @@ def get_ra_dec_constraint(city: str, time_input: str = "") -> str:
     "lst_hms": lst.to_string(unit=u.hour, sep='hms')
 }
 
-@tool
-def get_visible_solar_system_objects(city: str, time_str: str):
+
+def get_visible_solar_system_objects(lat:str, lon:str, time_utc: str):
     """
     Simplifié : Renvoie un booléen 'is_daytime' et la liste 'observables'.
     Si il fait jour, la liste ne contient QUE le Soleil/Lune (si levés).
@@ -188,16 +162,8 @@ def get_visible_solar_system_objects(city: str, time_str: str):
     Args: 
     location_lat: location latitude
     location_lon: location longitude 
-    time_str: L'heure au format 'YYYY-MM-DD HH:MM:SS'
+    time_utc: L'heure au format UTC
     """
-
-    coords, _ = get_coordinates(city)
-
-    if not coords:
-        return {"is_daytime": False, "observables": [], "error": f"City '{city}' not found"}
-    
-    lat,lon = coords
-    time_utc = get_target_utc_date(city, time_str)
     t = Time(time_utc)
 
     loc = EarthLocation(lat=lat*u.deg, lon=lon*u.deg)
