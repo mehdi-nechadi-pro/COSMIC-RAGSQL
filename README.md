@@ -1,6 +1,6 @@
-# 🪐 AstroChat - AI Astronomical Observation Assistant
+# 🪐 COSMIC-RAGSQL - AI Astronomical Observation Assistant
 
-**AstroChat** is an intelligent assistant designed for amateur astronomers. It combines the power of Large Language Models (**Gemini**) with precise astronomical calculations (**Astropy**) to recommend observation targets in real-time, filtered by location, time, and visibility conditions.
+**COSMIC-RAGSQL** is an intelligent assistant designed for amateur astronomers. It combines the power of Large Language Models (**Gemini**) with precise astronomical calculations (**Astropy**) to recommend observation targets in real-time, filtered by location, time, and visibility conditions.
 
 The experience is delivered through a modern web interface featuring an interactive planetarium (**VirtualSky**).
 
@@ -64,14 +64,15 @@ The project relies on a three-agent architecture:
 ## 🚀 Installation & Setup
 
 ### 1. Prerequisites
-* Python 3.9+
+* Python 3.11+
 * A Google AI Studio API Key (Gemini).
 
 ### 2. Clone the repository and install dependencies
 ```bash
-git clone [https://github.com/your-username/astrochat.git](https://github.com/your-username/astrochat.git)
-cd astrochat
+git clone https://github.com/mehdi-nechadi-pro/COSMIC-RAGSQL.git
+cd COSMIC-RAGSQL
 pip install -r requirements.txt
+pip install uvicorn
 ```
 
 ## 3. Environment Configuration
