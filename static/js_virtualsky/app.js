@@ -1,3 +1,4 @@
+        let myLines; $.getJSON('/static/js_virtualsky/lines_latin.json', data => myLines = data.lines);
         var planetarium;
         let currentUserState = {
             lat: 48.8566, long: 2.3522, hour: new Date().toISOString(), city: "Localisation inconnue"
@@ -25,6 +26,7 @@
         meteorshowers: true,
         clock: dateObj,
     });
+    
 }
         async function sendChat() {
             var inputField = document.getElementById("userMsg");
@@ -58,17 +60,28 @@
                 if (data.latitude) currentUserState.lat = data.latitude;
                 if (data.longitude) currentUserState.long = data.longitude;
 
+                var constellations_names = data.constellations
+                console.log(data.constellations)
                 var targets = data.targets;
                 if (targets && targets.length > 0) {
                     createMap(parseFloat(data.latitude), parseFloat(data.longitude), data.hour);
+                    console.log(targets)
                     targets.forEach(obj => {
                         planetarium.addPointer({
-                            ra: parseFloat(obj.ra), dec: parseFloat(obj.dec), label: obj.label, colour: 'orange', r: 15
+                            ra: parseFloat(obj.ra), dec: parseFloat(obj.dec), label: obj.label, img: obj.url, url:" ", colour: 'orange', r: 15
                         });
                     })
                         
                 } else {
                     createMap(currentUserState.lat, currentUserState.long, currentUserState.hour);
+                }
+                
+                if (constellations_names) {
+                    setTimeout(() => {
+                    ShowConstellation(planetarium, constellations_names);
+                    planetarium.constellation.lines = true;
+                    planetarium.constellation.labels = true;
+                    planetarium.draw(); }, 200);
                 }
 
             } catch (error) {
@@ -158,4 +171,20 @@
             btnElement.classList.remove('active'); 
             btnElement.style.opacity = "0.5";
         }
+        }
+
+        function ShowConstellation(planetarium, constellations) {
+            let constellations_lines = []
+
+            for (let i =0; i<myLines.length; i++) {
+                for (let y =0; y<constellations.length; y++) {
+                    let constellation_line = myLines[i]
+                    let name = myLines[i][0]
+
+                    if(name == constellations[y]) {
+                        constellations_lines.push(constellation_line)
+                    }
+                }
+            }
+            planetarium.lines = constellations_lines
         }

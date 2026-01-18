@@ -35,6 +35,7 @@ class AgentState(TypedDict):
     sql_where: str
     planets: str
     timezone: str
+    constellations_target: List[str]
 graph_builder = StateGraph(AgentState)
 
 llm_pro = ChatGoogleGenerativeAI(
@@ -195,7 +196,7 @@ def astronomer(state = AgentState):
     final_message = [system_message] + history
 
     res = llm_with_tools.invoke(final_message)
-    # print_clean_debug("Astro", res)
+    print_clean_debug("Astro", res)
     raw_content = res.content
     
     #----------- PARSING JSON ------------#
@@ -209,18 +210,21 @@ def astronomer(state = AgentState):
 
         final_target = data.get("targets", [])
         chat_reply = data.get("chat_reply", "Voici les résultats.")
+        constellations_target = data.get("constellations_IAU")
     
         final_msg = AIMessage(content=chat_reply)
         
         return {
             "messages": [final_msg], 
             "final_target": final_target,
+            "constellations_target": constellations_target
         }
 
     except json.JSONDecodeError:
         return {
             "messages": [res], 
             "final_target": [],
+            "constellations_target": []
         }
 
 def vulgarisation(state = AgentState):
@@ -234,7 +238,6 @@ def vulgarisation(state = AgentState):
 
     # print("Données dans vulga : Heure=",state.get("hour"), " Ville=", 
     state.get("detected_city"), " lat/lon= (", state.get("latitude"), ",", state.get("longitude")
-
     return {"vulgarisation_output": res.content}
 
 

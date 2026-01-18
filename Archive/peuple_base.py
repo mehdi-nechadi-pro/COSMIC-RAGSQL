@@ -165,7 +165,7 @@ def clean_from_radians(rad_tuple):
 con = sqlite3.connect("Celestial.db")
 cur = con.cursor()
 
-cur.execute("CREATE TABLE Celestial(name, type, constellation, ra, dec, magnitude, url, catalogue)")
+cur.execute("CREATE TABLE Celestial(name, type, constellation, ra, dec, magnitude, url, catalogue, constellation_IAU)")
 
 caldwell_ngc = load_database("Archive/caldwell.json")
 
@@ -194,7 +194,7 @@ for i in range(1, 111):
         print(f"✅ {messier_name}, {obj_type}, {constellation}, {ra_final}, {dec_final}, {magnitude_sql},{url}")
 
         cur.execute(f"""INSERT INTO Celestial VALUES 
-                ('{messier_name}', '{obj_type}', '{constellation}', {ra_final}, {dec_final}, {magnitude_sql}, '{url}', '{catalogue}')
+                ('{messier_name}', '{obj_type}', '{constellation}', {ra_final}, {dec_final}, {magnitude_sql}, '{url}', '{catalogue}', '{constellation_IAU}')
         """)
         
     except Exception as e:
@@ -242,7 +242,7 @@ for caldwell_id, NGC_IC_Correspondance in caldwell_ngc.items():
         print(f"✅ {ngc_ic_id}, {obj_type}, {constellation}, {ra_final}, {dec_final}, {magnitude_sql},{url}")
 
         cur.execute(f""" INSERT INTO Celestial VALUES 
-                ('{ngc_ic_id}', '{obj_type}', '{constellation}', {ra_final}, {dec_final}, {magnitude_sql}, '{url}', '{catalogue}')
+                ('{ngc_ic_id}', '{obj_type}', '{constellation}', {ra_final}, {dec_final}, {magnitude_sql}, '{url}', '{catalogue}', '{constellation_IAU}')
         """)
     
     except Exception as e:
