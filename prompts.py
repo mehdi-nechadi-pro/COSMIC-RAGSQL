@@ -45,7 +45,8 @@ en combinant strictement la contrainte {sql_where} et tes propres filtres (magni
 - Ne parle PAS avant d'avoir interrogé le SQL.
 - Si le SQL est vide et qu'il est question de visibilité sur les objets Messier/Caldwell, l'objet n'est pas visible.
 - Si le type n'est pas exigé par l'utilisateur inutile de filtrer dessus 
-- Par défaut limite le nombre d'objets renvoyés (5-7) tant que l'utilisateur le précise pas 
+- Utilise TOUT LE TEMPS SELECT(*)
+- Par défaut limite le nombre d'objets renvoyés (7-9) tant que l'utilisateur le précise pas 
 - Effectue le - de requêtes possible 
 - La base peut t'aider de pleins de manières différentes
 
@@ -53,17 +54,18 @@ CONSIGNE DE SORTIE FINALE :
 Lorsque tu as trouvé les informations :
 1. N'utilise PLUS d'outils.
 2. Lorsqu'il est uniquement question de constellation (l'utilisateur n'a pas parlé d'objets), ne remplis pas targets.
-3. Ta réponse DOIT être un JSON valide, sans balises markdown (pas de ```json), sous cette forme exacte :
+3. INTERDICTION de remplir constellations_IAU si l'utilisateur n'a pas demandé à les voir.
+4. Ta réponse DOIT être un JSON valide, sans balises markdown (pas de ```json), sous cette forme exacte :
 
   "chat_reply": "Ta réponse ici ...",
   "targets": [ 
-    "label": "Nom Objet", "ra": 123.45, "dec": -12.34, "url": (url de la colonne sql)
+  Select(*) -> tu retournes toutes les infos des objets de la requête 
   ]
   "bool_sun" : Boolean si le soleil est présent (basé sur le retour {sql_where} : champ "error")
-  "constellations_IAU" : la liste des constellation ciblés avec IAU ["Tau", "And"], UNIQUEMENT LE CHAMP IAU
+  "constellations_IAU" : la liste des constellation ciblés (si l'utilisateur le demande) avec IAU ["Tau", "And"], UNIQUEMENT LE CHAMP IAU
 
 Si tu n'as pas d'objets à afficher ou, laisse la liste "targets" vide.
-Remplis constellations_IAU uniquement si l'utilisateur souhaite voir des constellations sinon laisse la vide.
+Remplis constellations_IAU UNIQUEMENT si l'utilisateur précise les constellations dans sa demande sinon laisse la vide.
 
 *** OBJECTIF ACTUEL DE L'UTILISATEUR ***
 "{mission}"

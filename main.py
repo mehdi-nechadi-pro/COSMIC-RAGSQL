@@ -37,7 +37,6 @@ async def chat_endpoint(request: UserRequest):
     print(f"📩 Message reçu : {request.message}")
 
     detected_city = get_city_from_latlon(request.latitude, request.longitude)
-
     print("Heure donnée par le front : ", request.hour, " et ville : ", detected_city)
 
     # Initial state for the graph
@@ -64,6 +63,7 @@ async def chat_endpoint(request: UserRequest):
         detected_city = result.get("detected_city")
         timezone = result.get("timezone")
         constellations = result.get("constellations_target")
+        local_hour = result.get("local_hour")
         print("constellation: ",constellations)
 
         final_local_hour_str = format_utc_to_local(detected_city, hour, timezone) # obligé d'envoyer en local sinon le LLM comprends rien
@@ -77,6 +77,7 @@ async def chat_endpoint(request: UserRequest):
             "latitude": latitude,
             "longitude": longitude,
             "hour": final_local_hour_str,
+            "local_hour": local_hour,
             "detected_city": detected_city,
             "constellations": constellations
         }

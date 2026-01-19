@@ -1,9 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import locale
 import os
 import sqlite3
 from typing import Annotated, Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from pydantic import Field, BaseModel
 from sqlalchemy import create_engine, event
@@ -24,6 +25,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 class AgentState(TypedDict):
     city: str   # "Lyon", "Paris"
     hour: str   # "2025-12-30 17:29:45.285278"
+    local_hour: str
     intent: str  # "Observation", "education"
     infos: str  # "Whats the best nebula we can see ?"
     vulgarisation_output: str   # "Blablabla"
@@ -53,10 +55,11 @@ class RoutingAndExtraction(BaseModel):
     intent: str     #"observation" ou "education"
     city: Optional[str] = Field(None)     
     hour: Optional[str] = Field(None) 
+    live_time: Optional[bool] # true si seul le marqueur temporel est la
 
 def update_if_valid(current_val, new_val):
     bad_values = ["null", "Null", "None", "", None]
-    print("APPEL UPDATE -- current=", current_val, " new=", new_val)
+    # print("APPEL UPDATE -- current=", current_val, " new=", new_val)
     if new_val in bad_values:
         return current_val
     return new_val
@@ -114,7 +117,6 @@ def print_clean_debug(step_name, message_object):
     print("-" * 30)
 
 def orchestrateur(state = AgentState):
-
     structured_llm = llm_lite.with_structured_output(RoutingAndExtraction)
 
     history = state.get("messages", [])
@@ -132,41 +134,54 @@ def orchestrateur(state = AgentState):
         "role": "system", 
         "content": f"""
 --- CONTEXTE TEMPOREL CRITIQUE ---
-Date et Heure Système Actuelles : {current_time_str}
-Nous sommes le : {current_day_str}
+Date et Heure Système Actuelles : {current_time_str} à "Villeurbanne"
+Nous sommes le : {current_day_str} 
 Ville actuellement connue par le système : {city}
 ----------------------------------
 RÈGLE ABSOLUE : Utilise cette date comme référence unique pour "aujourd'hui", "ce soir", "demain".
 MODIFIE LA VILLE UNIQUEMENT si elle est donnée dans le prompt
 NE DEVINE PAS L'ANNÉE. L'année est {now.year}.
-NE TOUCHES PAS AUX FUSEAUX HORAIRES, l'utilisateur demande 18h -> tu renvoies 18h
 ----------------------------------
 Tu es un extracteur astronome.
 Extrais l'intention ("observation" ou "education").
 Extrais l'heure et le lieu SI ils sont donnés.
 INTERDICTION D'HALLUCINER, si une ou plusieurs des valeurs sont non trouvés RENVOIE RIEN
-SI C'EST de le déduire alors déduis l'heure (matin -> 6h, soir -> 20h) SOUS CE FORMAT: "2050-01-01T22:53:00" en LOCAL, AUCUNE CONVERSION AUTORISEE
-Sinon renvoie rien. """
+
+TU feras la différence entre ces 2 cas pour la date/heure : 
+
+- L'heure est donnée dans l'input ou peut-être déduis -> on part du principe que l'heure est en local donc on renvoie ça directement et on met live_time = false
+(ex : 18h à tokyo) -> on renvoie betement 18h sous le format : "2050-01-01T18:00:00". 
+(ex2 : ce soir à tokyo) -> on déduis soir = 20h (globalement) et on renvoie sous le format : "2050-01-01T20:00:00" 
+
+- L'heure n'est pas donnée et le seul marqueur temporel est présent est "maintenant" ou un équivalent =->  
+(ex : maintenant à tokyo) -> On prend {current_time_str} on renvoie ça ET on met live_time = true
+(ex2: que voir à tokyo) -> Pareil (On prend {current_time_str} on renvoie ça ET on met live_time = true)
+"""
 }
 
     final_message = [system_msg] + history
     res = structured_llm.invoke(final_message)
 
-    print("Données de la réponse LLM :", res.intent, " Ville ? ", res.city, " Heure ? ", res.hour)
+    # print("Données de la réponse LLM :", res.intent, "\n", " Ville ? ", res.city,"\n" ," Heure ? ", res.hour, "\n" , "Live_Time? ", res.live_time)
 
     # ALL datas are available for the computation 
     final_city = update_if_valid(state.get("detected_city"),res.city)
     final_hour = update_if_valid(state.get("hour"),res.hour)
     coords, timezone = get_coordinates(final_city)
     latitude,longitude = coords
-    final_utc = get_target_utc_date(timezone, final_hour)
 
-    # print("Valeur gardé et envoyé à l'astronomer : ",final_city, " ", final_hour, "utc : ", final_utc)
+    print("Timezone =", timezone)
+    if (res.live_time): # On parle d'actuellement pas besoin du llm juste de .now()
+        tz = ZoneInfo(timezone)
+        local_now = datetime.now(tz)
+        final_utc = local_now.astimezone(ZoneInfo("UTC"))
+    else: # On passe en UTC puisque l'heure donnée est locale (ex: 18h à moscou)
+        local_now = final_hour
+        final_utc = get_target_utc_date(timezone, final_hour)
 
+    print("Valeur gardé et envoyé à l'astronomer, Ville : ",final_city, "\n", "Heure locale (si dispo) : ", local_now, "\n", "Heure UTC : ", final_utc)
     constraint = get_ra_dec_constraint(latitude, longitude, final_utc)
     planets = get_visible_solar_system_objects(latitude, longitude, final_utc)
-
-    # print("Contrainte stockée dans sql_where : ", constraint)
 
     return {"intent": res.intent,
             "detected_city": final_city,
@@ -175,7 +190,8 @@ Sinon renvoie rien. """
             "longitude": longitude,
             "sql_where": constraint,
             "planets": planets,
-            "timezone" : timezone}
+            "timezone" : timezone,
+            "local_hour": local_now}
 
 def astronomer(state = AgentState):
     # print("Données entrée Astronomer : Heure=",state.get("hour"), " Ville=", 
@@ -262,3 +278,29 @@ graph_builder.add_edge("tools", "astro")
 graph_builder.set_finish_point("vulga")
 
 graph = graph_builder.compile()
+
+
+def getReponse(prompt):
+    print(prompt)
+    now_utc = datetime.now(timezone.utc)
+    iso_string = now_utc.isoformat().replace("+00:00", "Z")
+    initial_state = {
+        "infos": prompt,
+        "latitude": 45.76936700000001,
+        "longitude": 4.893746,
+        "hour": iso_string,
+        "final_target": [],
+        "messages": [("user", prompt)] ,
+        "detected_city": 'Villeurbanne'
+    }
+    orchestrateur(initial_state) # Appel uniquement le noeud Orchestrateur
+    # graph.invoke(initial_state) # Appel tout le graph
+
+# for i in range(1):
+#     getReponse("Que voir ?")
+#     getReponse("Que voir à Moscou?")
+#     getReponse("Que voir ce soir à Moscou?")
+#     getReponse("Que voir à Tokyo?")
+#     getReponse("Que voir ce soir à Moscou?")
+#     getReponse("Que voir à 18h à Moscou?")
+

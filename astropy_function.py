@@ -13,7 +13,7 @@ geolocator = Nominatim(user_agent="mon_astro_app_v1")
 
 @lru_cache(maxsize=128)
 def get_coordinates(city_name: str):
-    print("Get Coords : ", city_name)
+    # print("Get Coords : ", city_name)
     """
     Prend un nom de ville (ex: 'Lyon') et renvoie (lat, lon) et la timezone.
     Renvoie None si introuvable.
@@ -58,7 +58,7 @@ def format_utc_to_local(city: str, utc_dt: datetime, tz_str= None) -> str:
     
     local_dt = utc_dt.astimezone(target_tz)
 
-    print ("Format UTC -> Local (", city,",",utc_dt, " UTC) -> ", local_dt.isoformat())
+    # print ("Format UTC -> Local (", city,",",utc_dt, " UTC) -> ", local_dt.isoformat())
     
     return local_dt.isoformat()
 
@@ -91,7 +91,7 @@ def get_target_utc_date(timezone, user_input_str: str = "") -> datetime:
         print(f"🔥 Erreur parsing '{user_input_str}', fallback NOW.")
         final_utc = now_utc
     
-    print("Get Target UTC (" ",",user_input_str,  ": LOCAL) -> ",final_utc ," ")
+    # print("Get Target UTC (" ",",user_input_str,  ": LOCAL) -> ",final_utc ," ")
     return final_utc
 
 def maths_altitude(ra, dec, lat, lst, min_alt=0):
@@ -131,12 +131,12 @@ def get_ra_dec_constraint(lat: float, lon: float, time_utc: str = "") -> str:
 
     lst = observation_time.sidereal_time('mean', longitude=location.lon) # calcul du temps sidéral local (la valeur est l'ascension droite actuellement au zénith)
     lst_hours = lst.to_value(u.hourangle)
-    print("LST hours : ", lst_hours)
+    # print("LST hours : ", lst_hours)
 
     sun = get_sun(observation_time)
     sun_altaz = sun.transform_to(AltAz(obstime=observation_time, location=location))
     sun_altitude = sun_altaz.alt.degree
-    print (sun_altitude)
+    # print (sun_altitude)
     if sun_altitude > -18: # crepuscule astronomiquea
         # print("SUN IS THERE")
         return {
