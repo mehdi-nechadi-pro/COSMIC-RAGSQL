@@ -2,7 +2,11 @@
     var planetarium;
     var constellationsState = false;
     let currentUserState = {
-        lat: 48.8566, long: 2.3522, hour: new Date().toISOString(), city: "Localisation inconnue", local_hour: new Date().toString()
+        lat: 48.8566, 
+        long: 2.3522, 
+        hour: new Date().toISOString(), // UTC Strict
+        city: "Paris",
+        local_hour: new Date().toISOString() 
     };
     let targets = {}
 
@@ -27,6 +31,8 @@
             keyboard: false,
             meteorshowers: true,
             clock: dateObj,
+            showdate: false,
+            showposition: false,
         });
     }
     async function sendChat() {
@@ -39,6 +45,7 @@
         addMessage("Recherche en cours...", "bot temporary");
 
         try {
+            console.log("Envoi : ", currentUserState)
             // Send Initial State
             const response = await fetch('/api/chat', {
                 method: 'POST',
@@ -56,16 +63,22 @@
             const data = await response.json();
             document.querySelector(".temporary")?.remove();
             addMessage(data.reply, "bot", data.targets);
-
+            
+            // Update currentUserState
             if (data.detected_city) currentUserState.city = data.detected_city;
             if (data.hour) currentUserState.hour = data.hour;
             if (data.latitude) currentUserState.lat = data.latitude;
             if (data.longitude) currentUserState.long = data.longitude;
             if (data.local_hour) currentUserState.local_hour = data.local_hour;
+            
+            console.log("Reception : ",currentUserState)
 
-            Update_info_box(data.detected_city, data.local_hour, data.latitude, data.longitude)
-
+            // Update Date/Hour/Location on the map
+            Update_info_box(data.detected_city, data.hour,  data.local_hour, data.latitude, data.longitude)
+            
+            // Create the Map and add the targets pointers
             var constellations_names = data.constellations
+            console.log(constellations_names)
             var targets = data.targets;
             if (targets && targets.length > 0) {
                 createMap(parseFloat(data.latitude), parseFloat(data.longitude), data.hour);
@@ -79,7 +92,8 @@
             } else {
                 createMap(currentUserState.lat, currentUserState.long, currentUserState.hour);
             }
-                
+            
+            // We show the constellations
             if (constellations_names) {
                 setTimeout(() => {
                 ShowConstellation(planetarium, constellations_names);
@@ -88,6 +102,7 @@
                 planetarium.draw(); }, 200);
             }
 
+            // Show the Map
             liftCurtain()
 
             } catch (error) {
@@ -125,11 +140,44 @@
 
     }
 
-    function Update_info_box(city, local_hour, lat, lon) {
-        
-        document.getElementById("city-display").innerText = "City : " + city;
-        document.getElementById("local-time-display").innerText = "Local Hour : " + local_hour ;
-        document.getElementById("latitude-longitude-display").innerText = "Lat/Lon : " + lat + " / " + lon;
+    function Update_info_box(city, utc_hour, local_hour, lat, lon) {
+        document.getElementById("city-display").innerText = city;
+        document.getElementById("latitude-longitude-display").innerText = formatCoords(lat,lon)
+        document.getElementById("local-time-display").innerText =formatAstroDateStrict(local_hour, utc_hour);
+    }
+
+    function formatCoords(lat, lon) {
+        const latitude = parseFloat(lat);
+        const longitude = parseFloat(lon);
+
+        const latDir = latitude >= 0 ? 'N' : 'S';
+        const lonDir = longitude >= 0 ? 'E' : 'W';
+
+        return `${Math.abs(latitude).toFixed(2)}°${latDir}, ${Math.abs(longitude).toFixed(2)}°${lonDir}`; 
+    }
+
+    function formatAstroDateStrict(isoString, utcString) {
+        console.log("Avant : ", isoString)
+        // isoString ex: "2026-01-20T14:29:00.070122+03:00"
+        const parts = isoString.split('T');
+        const dateRaw = parts[0]; 
+        const timeRaw = parts[1]; 
+
+        const months = ["janvier", "février", "mars", "avril", "mai", "juin", 
+                        "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+        const dateParts = dateRaw.split('-');
+        const year = dateParts[0];
+        const month = months[parseInt(dateParts[1]) - 1];
+        const day = parseInt(dateParts[2]);
+
+        const timePart = timeRaw.substring(0, 5).replace(':', 'h'); // "14h29"
+
+        final_format = `${day} ${month} ${year} : ${timePart}`
+
+        const offsetMatch = utcString.match(/([+-])(\d{2}):\d{2}$/);
+        final_format += ` (${offsetMatch[1]}${parseInt(offsetMatch[2])})`;
+
+        return final_format
     }
 
     function liftCurtain() {
@@ -168,27 +216,6 @@
         planetarium.draw(); 
     }
 
-    function toggleConstellation(btnElement){ 
-        console.log(planetarium)
-        console.log("ToggleConstellation bool : ", constellationsState)
-        if (!planetarium) return;
-        constellationsState = !constellationsState
-
-        if (planetarium.constellation) {
-            planetarium.constellation.lines = constellationsState; 
-            planetarium.constellation.labels = constellationsState;
-        }
-        planetarium.draw(); 
-
-        if (constellationsState) {
-        btnElement.classList.add('active'); 
-        btnElement.style.opacity = "1";
-        } else {
-            btnElement.classList.remove('active'); 
-            btnElement.style.opacity = "0.5";
-        }
-    }
-
     function toggleFullscreen() {
         const mapContainer = document.getElementById('map-container');
         const btn = document.getElementById('toggleMapBtn');
@@ -221,7 +248,6 @@
     }
 
     function targets_to_card(targets){
-        // On garde le conteneur parent pour la grille
         let fullHtml = '<div class="astro-grid-container">';
         
         targets.forEach((result) => { 
@@ -243,15 +269,15 @@
     }
 
     function openCardDetails(label) {
-    let searchName = (typeof label === 'object') ? label.name : label;
-    
-    console.log("On cherche : ", searchName);
-    const target = targets.find(t => t.name === searchName);
-    console.log("Target trouvé : ", target);
+        let searchName = (typeof label === 'object') ? label.name : label;
+        
+        console.log("On cherche : ", searchName);
+        const target = targets.find(t => t.name === searchName);
+        console.log("Target trouvé : ", target);
 
-    if (!target) return; 
+        if (!target) return; 
 
-    const html = `
+        const html = `
         <div class="detail-header-img" style="background-image: url('${target.url}');">
             <button class="close-btn-round" id="btnClose">×</button>
         </div>
@@ -304,24 +330,25 @@
                 <button id="btnLocate" class="btn-big btn-primary">Localiser dans le ciel</button>
             </div>
         </div>
-    `;
+        `;
 
-    const panel = document.getElementById("detailsPanel");
-    const content = document.getElementById("detailsContent");
+        const panel = document.getElementById("detailsPanel");
+        const content = document.getElementById("detailsContent");
 
-    content.innerHTML = html;
-    panel.style.display = "block";
+        content.innerHTML = html;
+        panel.style.display = "block";
 
-    document.getElementById("btnLocate").onclick = () => {
+        document.getElementById("btnLocate").onclick = () => {
             highlightTarget(target.name);
-        panel.style.display = "none"; 
-    };
+            panel.style.display = "none"; 
+        };
 
-    document.getElementById("btnClose").onclick = () => {
-        panel.style.display = "none";
-    };
-}
+        document.getElementById("btnClose").onclick = () => {
+            panel.style.display = "none";
+        };
+    }
 
+    // Highlight the target pointer 
     function highlightTarget(targetLabel) {
         console.log(targetLabel)
         if (!planetarium) return;
@@ -343,21 +370,65 @@
 
     }
 
-$(document).ready(function() { // Initial Map created based on the localisation retrieved by the nav
+    async function getCityFromLatLonJS(lat, lon) {
+        const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`;
 
-    // liftCurtain()
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': 'MonAppAstro/1.0' 
+                }
+            });
+            
+            if (!response.ok) throw new Error("Erreur API");
+
+            const data = await response.json();
+            const address = data.address || {};
+
+            return address.city || address.town || address.village || "Lieu Inconnu";
+
+        } catch (error) {
+            console.warn("Erreur Reverse Geocoding :", error);
+            return null; 
+        }
+    }
+
+$(document).ready(function() { 
+
+    function unlockInterface(cityName) {
+        currentUserState.city = cityName;
+        
+        // createMap(currentUserState.lat, currentUserState.long, currentUserState.hour);
+        
+        Update_info_box(
+            currentUserState.city, 
+            currentUserState.hour, 
+            currentUserState.local_hour, 
+            currentUserState.lat, 
+            currentUserState.long
+        );
+    }
+
+    // We fetch the location via the navigator (If the User is fast -> it takes currentUserState (by default Paris))
     if (navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
-            (position) => {
+            async (position) => {
+                console.log("📍 Position trouvée :", position.coords.latitude, position.coords.longitude);
+                
                 currentUserState.lat = position.coords.latitude;
                 currentUserState.long = position.coords.longitude;
-                createMap(currentUserState.lat, currentUserState.long, currentUserState.hour);
+                
+                let city = await getCityFromLatLonJS(currentUserState.lat, currentUserState.long)
+                unlockInterface(city); 
             }, 
             (error) => {
-                createMap(currentUserState.lat, currentUserState.long, currentUserState.hour);
-            }
+                console.warn("⚠️ Échec GPS ou refus user. Fallback sur Paris.");
+                unlockInterface("Paris (Par défaut)");
+            },
+            { timeout: 10000 } // Important : abandonne si le GPS met plus de 10s
         );
     } else {
-        createMap(currentUserState.lat, currentUserState.long, currentUserState.hour);
+        // Pas de support
+        unlockInterface("Paris (GPS non supporté)");
     }
 });

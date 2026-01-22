@@ -146,6 +146,7 @@ Tu es un extracteur astronome.
 Extrais l'intention ("observation" ou "education").
 Extrais l'heure et le lieu SI ils sont donnés.
 INTERDICTION D'HALLUCINER, si une ou plusieurs des valeurs sont non trouvés RENVOIE RIEN
+Detected_city peut aussi être rempli de cette façon "Ville, Pays" en cas d'ambiguité
 
 TU feras la différence entre ces 2 cas pour la date/heure : 
 
@@ -161,8 +162,6 @@ TU feras la différence entre ces 2 cas pour la date/heure :
 
     final_message = [system_msg] + history
     res = structured_llm.invoke(final_message)
-
-    # print("Données de la réponse LLM :", res.intent, "\n", " Ville ? ", res.city,"\n" ," Heure ? ", res.hour, "\n" , "Live_Time? ", res.live_time)
 
     # ALL datas are available for the computation 
     final_city = update_if_valid(state.get("detected_city"),res.city)
@@ -293,10 +292,14 @@ def getReponse(prompt):
         "messages": [("user", prompt)] ,
         "detected_city": 'Villeurbanne'
     }
-    orchestrateur(initial_state) # Appel uniquement le noeud Orchestrateur
-    # graph.invoke(initial_state) # Appel tout le graph
+    #orchestrateur(initial_state) # Appel uniquement le noeud Orchestrateur
+    graph.invoke(initial_state) # Appel tout le graph
 
-# for i in range(1):
+for i in range(1):
+    getReponse("Que voir ?")
+    getReponse("Que voir à moscou ?")
+    getReponse("Que voir à los angeles ?")
+    getReponse("Que voir à los angeles au Chili ?")
 #     getReponse("Que voir ?")
 #     getReponse("Que voir à Moscou?")
 #     getReponse("Que voir ce soir à Moscou?")
