@@ -34,35 +34,8 @@ def get_coordinates(city_name: str):
 
 tf = TimezoneFinder()
 
-def format_utc_to_local(city: str, utc_dt: datetime, tz_str= None) -> str:
-    """
-    Prend une date UTC et une ville et une timezone, et renvoie l'heure locale formatée pour le front-end.
-    Ex: 2026-01-04 19:15 UTC -> "2026-01-04 20:15:00" (si Paris)
-    """
 
-    if isinstance(utc_dt, str):
-        try:
-            utc_dt = parser.parse(utc_dt)
-        except Exception:
-            return utc_dt
-        
-    if utc_dt.tzinfo is None:
-        utc_dt = pytz.utc.localize(utc_dt)
-
-    if(tz_str is None):
-        coords, tz_str = get_coordinates(city)
-        if not coords:
-            return utc_dt.strftime("%Y-%m-%d %H:%M:%S") + " (UTC)" # Fallback
-    
-    target_tz = pytz.timezone(tz_str) if tz_str else pytz.utc
-    
-    local_dt = utc_dt.astimezone(target_tz)
-
-    # print ("Format UTC -> Local (", city,",",utc_dt, " UTC) -> ", local_dt.isoformat())
-    
-    return local_dt.isoformat()
-
-def get_target_utc_date(timezone, user_input_str: str = "") -> datetime:
+def get_utc_date(timezone, user_input_str: str = "") -> datetime:
     """
     Transforme l'input du LLM en UTC grâce à l'heure locale et la timezone
     """
@@ -115,7 +88,7 @@ def maths_altitude(ra, dec, lat, lst, min_alt=0):
     except:
         return 0
 
-def get_ra_dec_constraint(lat: float, lon: float, time_utc: str = "") -> str:
+def get_celestial_constraint(lat: float, lon: float, time_utc: str = "") -> str:
     """
     Calcule les contraintes d'Ascension Droite (RA) et de Déclinaison (DEC) 
     pour une ville et une heure données.
@@ -131,28 +104,24 @@ def get_ra_dec_constraint(lat: float, lon: float, time_utc: str = "") -> str:
 
     lst = observation_time.sidereal_time('mean', longitude=location.lon) # calcul du temps sidéral local (la valeur est l'ascension droite actuellement au zénith)
     lst_hours = lst.to_value(u.hourangle)
-    # print("LST hours : ", lst_hours)
 
     sun = get_sun(observation_time)
     sun_altaz = sun.transform_to(AltAz(obstime=observation_time, location=location))
     sun_altitude = sun_altaz.alt.degree
-    # print (sun_altitude)
-    if sun_altitude > -18: # crepuscule astronomiquea
-        # print("SUN IS THERE")
+
+    if sun_altitude > -18: # Crepuscule Astronomique
         return {
-            "error": f"The sun is at altitude={sun_altitude}, so nothing except it can be seen",
+            "error": f"The sun is at altitude={sun_altitude}, so no deep sky objects can be seen",
             "sql_where": "",
             "lst_hms": lst.to_string(unit=u.hour, sep='hms')
         }
-
-    # print("SUN IS NOT THERE")
+    
     constraint = f""" IS_VISIBLE(ra,dec,{lat}, {lst_hours}, 5)"""
     return {
     "error" : "",
     "sql_where": constraint,    
     "lst_hms": lst.to_string(unit=u.hour, sep='hms')
 }
-
 
 def get_visible_solar_system_objects(lat:str, lon:str, time_utc: str):
     """
@@ -174,10 +143,10 @@ def get_visible_solar_system_objects(lat:str, lon:str, time_utc: str):
         sun_obj = get_body('sun', t, loc).transform_to(altaz_frame)
         sun_alt = float(sun_obj.alt.degree)
         
-    is_daytime = sun_alt > -6
+    is_daytime = sun_alt > -6 # Crépuscule Astronomique
     
     if is_daytime:
-        targets = ['sun', 'moon']
+        targets = ['moon']
     else:
         targets = ['moon', 'mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune']
 

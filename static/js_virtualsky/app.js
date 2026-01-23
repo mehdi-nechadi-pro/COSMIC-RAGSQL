@@ -6,9 +6,10 @@
         long: 2.3522, 
         hour: new Date().toISOString(), // UTC Strict
         city: "Paris",
-        local_hour: new Date().toISOString() 
+        local_hour: new Date().toISOString()
     };
     let targets = {}
+    let conversationHistory = [];
 
     function createMap(lat, long, hourString) {
         let dateObj = new Date(hourString);
@@ -38,6 +39,7 @@
     async function sendChat() {
         var inputField = document.getElementById("userMsg");
         var text = inputField.value.trim();
+        conversationHistory.push({ role: "user", content: text });
         if (!text) return;
 
         addMessage(text, "user");
@@ -55,7 +57,8 @@
                     city: currentUserState.city, 
                     hour: currentUserState.hour, 
                     latitude: currentUserState.lat, 
-                    longitude: currentUserState.long
+                    longitude: currentUserState.long,
+                    history: conversationHistory,
                     })
                 });
             
@@ -63,6 +66,7 @@
             const data = await response.json();
             document.querySelector(".temporary")?.remove();
             addMessage(data.reply, "bot", data.targets);
+            conversationHistory.push({ role: "ai", content: data.reply });
             
             // Update currentUserState
             if (data.detected_city) currentUserState.city = data.detected_city;
@@ -99,6 +103,7 @@
                 ShowConstellation(planetarium, constellations_names);
                 planetarium.constellation.lines = true;
                 planetarium.constellation.names = true;
+                planetarium.constellation.labels = true;
                 planetarium.draw(); }, 200);
             }
 
@@ -141,6 +146,7 @@
     }
 
     function Update_info_box(city, utc_hour, local_hour, lat, lon) {
+        console.log("UTC : ", utc_hour, " LOCAL : ", local_hour)
         document.getElementById("city-display").innerText = city;
         document.getElementById("latitude-longitude-display").innerText = formatCoords(lat,lon)
         document.getElementById("local-time-display").innerText =formatAstroDateStrict(local_hour, utc_hour);
@@ -157,6 +163,8 @@
     }
 
     function formatAstroDateStrict(isoString, utcString) {
+
+        if (!isoString || !isoString.includes('T')) return "Date inconnue";
         console.log("Avant : ", isoString)
         // isoString ex: "2026-01-20T14:29:00.070122+03:00"
         const parts = isoString.split('T');
@@ -174,9 +182,12 @@
 
         final_format = `${day} ${month} ${year} : ${timePart}`
 
-        const offsetMatch = utcString.match(/([+-])(\d{2}):\d{2}$/);
-        final_format += ` (${offsetMatch[1]}${parseInt(offsetMatch[2])})`;
-
+        const offsetMatch = utcString ? utcString.match(/([+-])(\d{2}):\d{2}$/) : null;
+        if (offsetMatch) {
+            final_format += ` (${offsetMatch[1]}${parseInt(offsetMatch[2])})`;
+        } else if (utcString && utcString.endsWith('Z')) {
+            final_format += ` (+0)`; // Format UTC Zulu
+        }
         return final_format
     }
 

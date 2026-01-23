@@ -11,9 +11,10 @@ from sqlalchemy import create_engine, event
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph
 from langgraph.graph.message import add_messages
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.utilities import SQLDatabase
-from astropy_function import get_ra_dec_constraint, get_target_utc_date, maths_altitude, get_coordinates, get_visible_solar_system_objects
+from astropy_function import get_celestial_constraint, get_utc_date, maths_altitude, get_coordinates, get_visible_solar_system_objects
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.messages import AIMessage
@@ -28,8 +29,8 @@ class AgentState(TypedDict):
     local_hour: str
     intent: str  # "Observation", "education"
     infos: str  # "Whats the best nebula we can see ?"
-    vulgarisation_output: str   # "Blablabla"
-    messages: Annotated[list, add_messages] # LISTE DES MESSAGES
+    vulgarisation_output: str   # "Here is what you can see"
+    messages: Annotated[list, add_messages] # Historique des messages
     final_target: List[Dict[str, Any]] # JSON OBJETS TROUVES
     detected_city: Optional[str] = Field(description="Nom de la ville demandée par l'user, si différente de l'actuelle.")
     latitude: float
@@ -56,6 +57,7 @@ class RoutingAndExtraction(BaseModel):
     city: Optional[str] = Field(None)     
     hour: Optional[str] = Field(None) 
     live_time: Optional[bool] # true si seul le marqueur temporel est la
+    mission: Optional[str] # Reformule si la demande n'est pas complète
 
 def update_if_valid(current_val, new_val):
     bad_values = ["null", "Null", "None", "", None]
@@ -117,9 +119,11 @@ def print_clean_debug(step_name, message_object):
     print("-" * 30)
 
 def orchestrateur(state = AgentState):
-    structured_llm = llm_lite.with_structured_output(RoutingAndExtraction)
+    print("--------- Entrée Orchestrateur ---------")
+    structured_llm = llm_pro.with_structured_output(RoutingAndExtraction)
 
     history = state.get("messages", [])
+
     try:
         locale.setlocale(locale.LC_TIME, 'fr_FR.UTF-8') 
     except:
@@ -147,6 +151,8 @@ Extrais l'intention ("observation" ou "education").
 Extrais l'heure et le lieu SI ils sont donnés.
 INTERDICTION D'HALLUCINER, si une ou plusieurs des valeurs sont non trouvés RENVOIE RIEN
 Detected_city peut aussi être rempli de cette façon "Ville, Pays" en cas d'ambiguité
+Tu dois reformuler la demande à l'aide de l'historique des messages de l'UTILISATEUR si la demande est tronqué : dans mission
+Ex: Première entrée : Que voir comme nébula à Tokyo ?, Deuxième entrée : Et comme galaxie ? -> tu met mission= Que voir à Tokyo comme galaxie
 
 TU feras la différence entre ces 2 cas pour la date/heure : 
 
@@ -157,30 +163,42 @@ TU feras la différence entre ces 2 cas pour la date/heure :
 - L'heure n'est pas donnée et le seul marqueur temporel est présent est "maintenant" ou un équivalent =->  
 (ex : maintenant à tokyo) -> On prend {current_time_str} on renvoie ça ET on met live_time = true
 (ex2: que voir à tokyo) -> Pareil (On prend {current_time_str} on renvoie ça ET on met live_time = true)
+
+Tu pourras aussi retourner des dates du passés si l'utilisateur le souhaite.
+Mais n'oublie JAMAIS LE FORMAT DE L'HEURE LOCALE dans le cas ou l'heure peut être déduit/est donnée.
 """
 }
 
     final_message = [system_msg] + history
     res = structured_llm.invoke(final_message)
 
+    # print(res)
+
     # ALL datas are available for the computation 
     final_city = update_if_valid(state.get("detected_city"),res.city)
     final_hour = update_if_valid(state.get("hour"),res.hour)
     coords, timezone = get_coordinates(final_city)
     latitude,longitude = coords
+    final_mission = res.mission
+
+    is_live = res.live_time
+
+    if res.intent == "education" or res.hour is None:
+        is_live = True
 
     print("Timezone =", timezone)
-    if (res.live_time): # On parle d'actuellement pas besoin du llm juste de .now()
+    if (is_live): # On parle d'actuellement pas besoin du llm juste de .now()
         tz = ZoneInfo(timezone)
         local_now = datetime.now(tz)
         final_utc = local_now.astimezone(ZoneInfo("UTC"))
     else: # On passe en UTC puisque l'heure donnée est locale (ex: 18h à moscou)
         local_now = final_hour
-        final_utc = get_target_utc_date(timezone, final_hour)
+        final_utc = get_utc_date(timezone, final_hour)
 
-    print("Valeur gardé et envoyé à l'astronomer, Ville : ",final_city, "\n", "Heure locale (si dispo) : ", local_now, "\n", "Heure UTC : ", final_utc)
-    constraint = get_ra_dec_constraint(latitude, longitude, final_utc)
+    print("- Valeur gardé et envoyé à l'astronomer \n Intent :", res.intent, "\n Mission : ", final_mission, " \n Ville : ",final_city, "\n Heure locale : ", local_now, "\n Heure UTC : ", final_utc)
+    constraint = get_celestial_constraint(latitude, longitude, final_utc)
     planets = get_visible_solar_system_objects(latitude, longitude, final_utc)
+    print("- Valeur de calcul stockée : \n Erreur_Soleil: ", constraint.get("error"), " \n Planetes visibles : ", [obj['name'] for obj in planets.get("observables")], "\n ----------------------------------------") 
 
     return {"intent": res.intent,
             "detected_city": final_city,
@@ -190,31 +208,39 @@ TU feras la différence entre ces 2 cas pour la date/heure :
             "sql_where": constraint,
             "planets": planets,
             "timezone" : timezone,
-            "local_hour": local_now}
+            "local_hour": local_now,
+            "infos": final_mission,} # Instruction modifié par l'orchestrateur puisqu'il a l'historique 
 
 def astronomer(state = AgentState):
-    # print("Données entrée Astronomer : Heure=",state.get("hour"), " Ville=", 
-    state.get("detected_city"), " lat/lon= (", state.get("latitude"), ",", state.get("longitude"), ")"
-    history = state.get("messages", [])
+    print("--------- Entrée Astronomer ---------")
+    mission_finale = state.get("infos")
 
-    system_message = {
-        "role": "system",
-        "content": UNIVERSAL_ASTRONOMER_PROMPT.format(
-            schema=schema_brut,
-            city=state.get("detected_city"),
-            hour=state.get("hour"),
-            mission=state.get("infos"),
-            sql_where = state.get("sql_where"),
-            planets= state.get("planets")
-        )
-    }
-    final_message = [system_message] + history
+    system_message = SystemMessage(content=UNIVERSAL_ASTRONOMER_PROMPT.format(
+        schema=schema_brut,
+        city=state.get("detected_city"),
+        hour=state.get("hour"),
+        mission=mission_finale,
+        sql_where=state.get("sql_where"),
+        planets=state.get("planets")
+    ))
+    human_instruction = HumanMessage(content=f"Instruction : {mission_finale}")
+
+    working_memory = []
+    all_messages = state.get("messages", [])
+    
+    for msg in all_messages:
+        if isinstance(msg, ToolMessage):
+            working_memory.append(msg)
+        elif isinstance(msg, AIMessage) and msg.tool_calls:
+            working_memory.append(msg)
+    
+    final_message = [system_message, human_instruction] + working_memory
 
     res = llm_with_tools.invoke(final_message)
     print_clean_debug("Astro", res)
+
     raw_content = res.content
     
-    #----------- PARSING JSON ------------#
     if isinstance(raw_content, list):
         raw_content = "".join([block["text"] for block in raw_content if block.get("type") == "text"])
 
@@ -251,7 +277,6 @@ def vulgarisation(state = AgentState):
 
     res = llm_lite.invoke(prompt)
 
-    # print("Données dans vulga : Heure=",state.get("hour"), " Ville=", 
     state.get("detected_city"), " lat/lon= (", state.get("latitude"), ",", state.get("longitude")
     return {"vulgarisation_output": res.content}
 
@@ -295,11 +320,11 @@ def getReponse(prompt):
     #orchestrateur(initial_state) # Appel uniquement le noeud Orchestrateur
     graph.invoke(initial_state) # Appel tout le graph
 
-for i in range(1):
-    getReponse("Que voir ?")
-    getReponse("Que voir à moscou ?")
-    getReponse("Que voir à los angeles ?")
-    getReponse("Que voir à los angeles au Chili ?")
+# for i in range(1):
+    # getReponse("Que voir il y a deux ans pile ?")
+    # getReponse("Que voir à moscou ?")
+    # getReponse("Que voir à los angeles ?")
+    # getReponse("Que voir à los angeles au Chili ?")
 #     getReponse("Que voir ?")
 #     getReponse("Que voir à Moscou?")
 #     getReponse("Que voir ce soir à Moscou?")

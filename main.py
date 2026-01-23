@@ -1,21 +1,9 @@
+from typing import Any, Dict, List
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from geopy.geocoders import Nominatim
-from astropy_function import format_utc_to_local
 from graph import graph
-
-geolocator = Nominatim(user_agent="mon_astro_app_v1")
-
-def get_city_from_latlon(lat, lon):
-    try:
-        location = geolocator.reverse((lat, lon), language='fr')
-        address = location.raw.get('address', {})
-        return address.get('city') or address.get('town') or address.get('village') or "Lieu Inconnu"
-    except:
-        return None
-
 
 app = FastAPI()
 
@@ -27,6 +15,7 @@ class UserRequest(BaseModel):
     hour: str 
     latitude: float
     longitude: float
+    history: List[Dict[str, Any]] = []
 
 @app.get("/")
 async def read_index():
@@ -36,22 +25,25 @@ async def read_index():
 async def chat_endpoint(request: UserRequest):
     print(f"📩 Message reçu : {request.message}")
 
-    print("Données par le front Info : ", request.message,"\n", " Lat/Lon :", request.latitude, request.longitude, "\n", " Ville :", request.city)
-    # detected_city = get_city_from_latlon(request.latitude, request.longitude)
-    # print("Heure donnée par le front : ", request.hour, " et ville : ", detected_city)
+    history_msgs = [
+        ("assistant" if m.get('role') in ["ai", "assistant", "bot"] else "user", m.get('content', ''))
+        for m in request.history if m.get('content')
+    ]
+    full_conversation = history_msgs[-4:]
 
-    # Initial state for the graph
+    print("Données par le front-end : \n Prompt : ", request.message,"\n Ville :", request.city, "(",request.latitude,",",request.longitude,") \n Heure :", request.hour)
+    
     initial_state = {
         "infos": request.message,
         "latitude": request.latitude,
         "longitude": request.longitude,
         "hour": request.hour,
         "final_target": [],
-        "messages": [("user", request.message)] ,
-        "detected_city": request.city
+        "messages": full_conversation,
+        "detected_city": request.city,
     }
 
-    print("Initial_State envoyé au graph : ", initial_state)
+    #print("Initial_State envoyé au graph : ", initial_state)
 
     try:
         # Graph Call
@@ -64,14 +56,10 @@ async def chat_endpoint(request: UserRequest):
         longitude = result.get("longitude")
         hour = result.get("hour")
         detected_city = result.get("detected_city")
-        timezone = result.get("timezone")
         constellations = result.get("constellations_target")
         local_hour = result.get("local_hour")
-        # print("constellation: ",constellations)
 
-        final_local_hour_str = format_utc_to_local(detected_city, hour, timezone) # obligé d'envoyer en local sinon le LLM comprends rien
-
-        print("🔥 Résultats données par le (graph) : Ville detectée= ", detected_city, "Heure UTC : ", hour ," Latitude= ", latitude, " Longitude= ", longitude)
+        print("Résultats données par le graph: \n Ville detectée = ", detected_city, "(",latitude,",",longitude,") \n Heure Locale : ", local_hour, "\n Heure UTC : ", hour)
 
         # Return result to the front-end
         return {
@@ -79,7 +67,7 @@ async def chat_endpoint(request: UserRequest):
             "targets": targets,
             "latitude": latitude,
             "longitude": longitude,
-            "hour": final_local_hour_str,
+            "hour": local_hour,
             "local_hour": local_hour,
             "detected_city": detected_city,
             "constellations": constellations
