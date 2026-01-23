@@ -303,7 +303,7 @@
 
             <span class="desc-label">DESCRIPTION</span>
             <p class="desc-text">
-                Description prochainement écrite via le RAG pour l'objet ${target.name}. 
+                ${target.description}
             </p>
 
             <div class="info-grid">

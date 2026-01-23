@@ -6,61 +6,70 @@ import time
 import sqlite3
 import math
 import requests
-from typing import Optional
+from typing import Optional, Dict, Union
 import re
 
-def get_image_wikipedia(object_name: str, thumbnail_width: int = 1000) -> Optional[str]:
+def get_wiki_info(object_name: str, thumbnail_width: int = 1000) -> dict:
     """
-    Récupère l'URL de l'image principale d'un objet via l'API Wikipédia (EN).
-    
-    Args:
-        object_name (str): Le nom de l'objet (ex: 'M42', 'NGC 224').
-        thumbnail_width (int): La largeur souhaitée en pixels (défaut: 1000px).
-        
-    Returns:
-        str: L'URL directe de l'image (JPG/PNG) ou None si introuvable.
+    Récupère Image + Description.
+    Stratégie : Tente FR -> Si échec ou homonymie, Tente EN -> Si échec, Valeur par défaut.
+    Garantit qu'il n'y a pas de None/undefined.
     """
     
-    search_query = object_name.strip()
-    if search_query.upper().startswith("M") and search_query[1:].isdigit():
-        search_query = f"Messier {search_query[1:]}"
-    
-    url = "https://en.wikipedia.org/w/api.php"
-    
-    params = {
-        "action": "query",
-        "format": "json",
-        "prop": "pageimages",   
-        "pithumbsize": thumbnail_width,
-        "titles": search_query,
-        "redirects": 1,         
-        "formatversion": 2        
-    }
-    
-    headers = {
-        "User-Agent": "AstroSQLBot/1.0 (educational project; contact@univ.fr)"
+    clean_name = object_name.strip()
+    if clean_name.upper().startswith("M") and clean_name[1:].isdigit():
+        clean_name = f"Messier {clean_name[1:]}"
+    clean_name = clean_name.replace("_", " ")
+
+    final_result = {
+        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Earth_from_Space.jpg/1000px-Earth_from_Space.jpg",
+        "description": "Information indisponible pour cet objet."
     }
 
-    try:
-        response = requests.get(url, params=params, headers=headers, timeout=5)
-        response.raise_for_status()
-        data = response.json()
+    def _fetch(query, lang):
+        try:
+            url = f"https://{lang}.wikipedia.org/w/api.php"
+            params = {
+                "action": "query", "format": "json", "prop": "pageimages|extracts",
+                "pithumbsize": thumbnail_width, "titles": query, "redirects": 1,
+                "formatversion": 2, "exsentences": 2, "exintro": 1, "explaintext": 1
+            }
+            headers = { "User-Agent": "AstroBot/1.0" }
+            resp = requests.get(url, params=params, headers=headers, timeout=3)
+            data = resp.json()
+            if "query" in data and "pages" in data["query"]:
+                page = data["query"]["pages"][0]
+                if "missing" not in page:
+                    return page
+        except:
+            pass
+        return None
+
+    page_fr = _fetch(clean_name, "fr")
+    
+    valid_fr = False
+    if page_fr and "extract" in page_fr:
+        desc = page_fr["extract"]
+        if "peut faire référence à" not in desc and "page d'homonymie" not in desc and len(desc) > 10:
+            final_result["description"] = desc.replace("\n", " ").strip()
+            if "thumbnail" in page_fr:
+                final_result["url"] = page_fr["thumbnail"]["source"]
+            valid_fr = True
+
+    # Fallback EN (si FR invalide ou incomplet)
+    if not valid_fr:
+        page_en = _fetch(clean_name, "en")
         
-        if "query" in data and "pages" in data["query"]:
-            page = data["query"]["pages"][0]
-            
-            if "missing" not in page and "thumbnail" in page:
-                image_url = page["thumbnail"]["source"]
-                
-                if image_url.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                    return image_url
-                    
-    except requests.exceptions.RequestException as e:
-        print(f"⚠️ Erreur réseau pour {object_name}: {e}")
-    except Exception as e:
-        print(f"⚠️ Erreur inattendue pour {object_name}: {e}")
+        if page_en and "extract" in page_en:
+             desc_en = page_en["extract"]
+             if "may refer to" not in desc_en and "disambiguation" not in desc_en:
+                final_result["description"] = "(EN) " + desc_en.replace("\n", " ").strip()
+                if "thumbnail" in page_en:
+                    final_result["url"] = page_en["thumbnail"]["source"]
+                elif page_fr and "thumbnail" in page_fr:
+                    final_result["url"] = page_fr["thumbnail"]["source"]
 
-    return None
+    return final_result
 
 # Mapping officiel IAU (3 lettres -> Nom complet)
 iau_constellations = {
@@ -96,7 +105,7 @@ MANUAL_CALDWELL_DATA = {
         "ra": 66.79,       
         "dec": 15.87,     
         "magnitude": 0.5,   
-        "url": "https://en.wikipedia.org/wiki/Hyades_(star_cluster)",
+        "url": "https://fr.wikipedia.org/wiki/Hyades_(star_cluster)",
         "catalogue": "Caldwell"
     },
     "Coalsack": {
@@ -106,7 +115,7 @@ MANUAL_CALDWELL_DATA = {
         "ra": 192.45,   
         "dec": -62.50,     
         "magnitude": 99.9,     
-        "url": "https://en.wikipedia.org/wiki/Coalsack_Nebula",
+        "url": "https://fr.wikipedia.org/wiki/Nébuleuse_du_Sac_à_Charbon",
         "catalogue": "Caldwell"
     },
     "Sh2-155": {
@@ -116,7 +125,7 @@ MANUAL_CALDWELL_DATA = {
         "ra": 343.95,         
         "dec": 62.62,       
         "magnitude": 7.7,
-        "url": "https://en.wikipedia.org/wiki/Cave_Nebula",
+        "url": "https://fr.wikipedia.org/wiki/Sh2-155",
         "catalogue": "Caldwell"
     }
 }
@@ -165,7 +174,7 @@ def clean_from_radians(rad_tuple):
 con = sqlite3.connect("Celestial.db")
 cur = con.cursor()
 
-cur.execute("CREATE TABLE Celestial(name, type, constellation, ra, dec, magnitude, url, catalogue, constellation_IAU)")
+cur.execute("CREATE TABLE Celestial(name, type, constellation, ra, dec, magnitude, url, catalogue, constellation_IAU, description)")
 
 caldwell_ngc = load_database("Archive/caldwell.json")
 
@@ -185,17 +194,18 @@ for i in range(1, 111):
     
         magnitude = obj.magnitudes
         magnitude = get_best_mag(magnitude)
-        magnitude_sql = magnitude if magnitude is not None else "NULL"
+        magnitude_sql = magnitude if magnitude is not None else 99.9 # Valeur float pour SQL au lieu de "NULL" string
 
-        url = get_image_wikipedia(messier_name)
+        wiki_data = get_wiki_info(messier_name)
+        url = wiki_data["url"]
+        description = wiki_data["description"]
 
         catalogue = "Messier"
 
-        print(f"✅ {messier_name}, {obj_type}, {constellation}, {ra_final}, {dec_final}, {magnitude_sql},{url}")
+        print(f"✅ {messier_name}, {obj_type}, {constellation}, {ra_final}, {dec_final}, {magnitude_sql}")
 
-        cur.execute(f"""INSERT INTO Celestial VALUES 
-                ('{messier_name}', '{obj_type}', '{constellation}', {ra_final}, {dec_final}, {magnitude_sql}, '{url}', '{catalogue}', '{constellation_IAU}')
-        """)
+        cur.execute("INSERT INTO Celestial VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", 
+                    (messier_name, obj_type, constellation, ra_final, dec_final, magnitude_sql, url, catalogue, constellation_IAU, description))
         
     except Exception as e:
         print(f"❌ Erreur sur {messier_name}: {e}")
@@ -214,10 +224,14 @@ for caldwell_id, NGC_IC_Correspondance in caldwell_ngc.items():
             ngc_ic_id = data["name"]
             obj_type = data["type"]
             constellation = get_constellation_name(data["constellation"])
+            constellation_IAU = data["constellation"]
             ra_final = data["ra"]
             dec_final = data["dec"]
             magnitude_sql = data["magnitude"]
             url = data["url"]
+            
+            wiki_data = get_wiki_info(ngc_ic_id)
+            description = wiki_data["description"]
 
         else: 
             obj = Dso(ngc_ic_id) # Récupération des infos OPENGC
@@ -231,19 +245,20 @@ for caldwell_id, NGC_IC_Correspondance in caldwell_ngc.items():
 
             magnitude = obj.magnitudes
             magnitude = get_best_mag(magnitude)
-            magnitude_sql = magnitude if magnitude is not None else "NULL"
+            magnitude_sql = magnitude if magnitude is not None else 99.9
 
-            name_wikipedia = propre = re.sub(r"(\D)(\d)", r"\1 \2", ngc_ic_id)
+            name_wikipedia = re.sub(r"(\D)(\d)", r"\1 \2", ngc_ic_id)
         
-            url = get_image_wikipedia(name_wikipedia)
+            wiki_data = get_wiki_info(name_wikipedia)
+            url = wiki_data["url"]
+            description = wiki_data["description"]
 
         catalogue = "Caldwell"
 
-        print(f"✅ {ngc_ic_id}, {obj_type}, {constellation}, {ra_final}, {dec_final}, {magnitude_sql},{url}")
+        print(f"✅ {ngc_ic_id}, {obj_type}, {constellation}, {ra_final}, {dec_final}, {magnitude_sql}")
 
-        cur.execute(f""" INSERT INTO Celestial VALUES 
-                ('{ngc_ic_id}', '{obj_type}', '{constellation}', {ra_final}, {dec_final}, {magnitude_sql}, '{url}', '{catalogue}', '{constellation_IAU}')
-        """)
+        cur.execute("INSERT INTO Celestial VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", 
+                    (ngc_ic_id, obj_type, constellation, ra_final, dec_final, magnitude_sql, url, catalogue, constellation_IAU, description))
     
     except Exception as e:
         print(f"❌ Erreur sur {ngc_ic_id}: {e}")
