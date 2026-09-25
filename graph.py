@@ -2,22 +2,29 @@ from datetime import datetime, timezone
 import json
 import locale
 import os
+import re
 import sqlite3
 from typing import Annotated, Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
-from pydantic import Field, BaseModel
-from sqlalchemy import create_engine, event
+from pydantic import BaseModel, Field
+from sqlalchemy import MetaData, Table, create_engine, event, select
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph
 from langgraph.graph.message import add_messages
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.utilities import SQLDatabase
-from astropy_function import get_celestial_constraint, get_utc_date, maths_altitude, get_coordinates, get_visible_solar_system_objects
+from astropy_function import (
+    get_celestial_constraint,
+    get_utc_date,
+    maths_altitude,
+    resolve_city_to_coords_and_tz,
+    resolve_local_time_to_utc,
+    get_visible_solar_system_objects,
+)
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode, tools_condition
-from langchain_core.messages import AIMessage
 from prompts import UNIVERSAL_ASTRONOMER_PROMPT, VULGARISATION_PROMPT
 
 load_dotenv()
@@ -42,12 +49,12 @@ class AgentState(TypedDict):
 graph_builder = StateGraph(AgentState)
 
 llm_pro = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         google_api_key=GOOGLE_API_KEY,
         temperature=0
 )
 llm_lite = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash-lite",
+        model="gemini-3.6-flash-lite",
         google_api_key=GOOGLE_API_KEY,
         temperature=0
 )
@@ -66,19 +73,99 @@ def update_if_valid(current_val, new_val):
         return current_val
     return new_val
 
-def create_sql_tool(db):
-    @tool
-    def execute_sql(query: str) -> str:
-        """
-        Exécute une requête SQL SELECT sur la base de données Celestial.
-        Prend en entrée une requête SQL valide et renvoie les résultats formatés.
-        """
-        try:
-            return db.run(query)
-        except Exception as e:
-            return f"Erreur lors de l'exécution SQL : {e}"
-            
-    return execute_sql
+ALLOWED_TARGET_FILTER_KEYS = {
+    "name",
+    "type",
+    "constellation",
+    "catalogue",
+    "magnitude_min",
+    "magnitude_max",
+    "limit",
+}
+MAX_TARGET_LIMIT = 50
+
+
+class TargetFilters(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+    constellation: Optional[str] = None
+    catalogue: Optional[str] = None
+    magnitude_min: Optional[float] = Field(default=None, ge=0.0)
+    magnitude_max: Optional[float] = Field(default=None, ge=0.0)
+    limit: int = Field(default=8, ge=1, le=MAX_TARGET_LIMIT)
+
+
+def validate_target_filters(filters_json: Any) -> Dict[str, Any]:
+    if filters_json is None:
+        return {"limit": 8}
+
+    if not isinstance(filters_json, dict):
+        raise ValueError("filters_json must be a dictionary, not raw SQL text.")
+
+    unknown = set(filters_json.keys()) - ALLOWED_TARGET_FILTER_KEYS
+    if unknown:
+        raise ValueError(
+            f"Unknown target filter(s): {sorted(unknown)}. "
+            f"Allowed keys: {sorted(ALLOWED_TARGET_FILTER_KEYS)}"
+        )
+
+    prohibited_sql = {"query", "sql", "raw_sql", "statement", "command"}
+    if prohibited_sql.intersection(filters_json):
+        raise ValueError("Raw SQL payloads are forbidden. Send validated filters only.")
+
+    for key, value in filters_json.items():
+        if isinstance(value, str):
+            lowered = value.lower()
+            if any(token in lowered for token in ["select", "insert", "update", "delete", "drop", "alter", "truncate", "union", "--", ";"]):
+                raise ValueError("String values must not contain raw SQL clauses or separators.")
+            if any(keyword in lowered for keyword in ["from ", "where ", "join ", "order by", "group by"]):
+                raise ValueError("String values must not look like SQL fragments.")
+
+    cleaned = TargetFilters.model_validate(filters_json).model_dump(exclude_none=True)
+    if cleaned.get("limit", 8) > MAX_TARGET_LIMIT:
+        raise ValueError(f"limit must be <= {MAX_TARGET_LIMIT}")
+    return cleaned
+
+
+def build_targets_query(filters: Dict[str, Any], engine):
+    metadata = MetaData()
+    celestial = Table("Celestial", metadata, autoload_with=engine)
+    conditions = []
+
+    for field, value in filters.items():
+        if field == "limit":
+            continue
+
+        column = getattr(celestial.c, field, None)
+        if column is None:
+            raise ValueError(f"Unsupported filter field: {field}")
+
+        if field in {"name", "type", "constellation", "catalogue"}:
+            conditions.append(column.ilike(f"%{value}%"))
+        elif field == "magnitude_min":
+            conditions.append(column >= value)
+        elif field == "magnitude_max":
+            conditions.append(column <= value)
+
+    stmt = select(celestial).where(*conditions).limit(filters.get("limit", 8))
+    return stmt
+
+
+@tool
+def search_targets(filters_json: dict) -> str:
+    """
+    Search the Celestial catalog using validated server-side filters only.
+    The model must pass a dict with allowed keys like name/type/constellation/limit.
+    No raw SQL strings or SQL clauses are allowed.
+    """
+    try:
+        cleaned_filters = validate_target_filters(filters_json)
+        query = build_targets_query(cleaned_filters, engine)
+        with engine.connect() as conn:
+            rows = conn.execute(query).mappings().all()
+        return json.dumps([dict(row) for row in rows])
+    except Exception as exc:  # pragma: no cover - defensive guard
+        return json.dumps({"error": str(exc)})
 
 
 def _register_custom_functions(dbapi_connection, connection_record):
@@ -94,24 +181,48 @@ db = SQLDatabase(engine)
 
 schema_brut = db.run("PRAGMA table_info(Celestial);")
 
-sql_tool = create_sql_tool(db)
-tools = [sql_tool]
+tools = [search_targets]
 tool_node = ToolNode(tools)
 llm_with_tools = llm_pro.bind_tools(tools)
+
+def extract_text_from_content(content: Any) -> str:
+    """Normalize Gemini content payloads into a plain text string."""
+    if content is None:
+        return ""
+
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        chunks: List[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                if "text" in block and isinstance(block["text"], str):
+                    chunks.append(block["text"])
+                elif "value" in block and isinstance(block["value"], str):
+                    chunks.append(block["value"])
+                elif "content" in block and isinstance(block["content"], str):
+                    chunks.append(block["content"])
+            elif isinstance(block, str):
+                chunks.append(block)
+        return "".join(chunks)
+
+    if isinstance(content, dict):
+        for key in ("text", "value", "content"):
+            if isinstance(content.get(key), str):
+                return content[key]
+        return json.dumps(content, ensure_ascii=False)
+
+    return str(content)
+
 
 def print_clean_debug(step_name, message_object):
     """Affiche le contenu du LLM proprement en virant la signature Google."""
     content = message_object.content
     
     print(f"\n--- 🔍 DEBUG {step_name} ---")
+    print(f"📝 CONTENU : {extract_text_from_content(content)}")
     
-    if isinstance(content, list):
-        full_text = ""
-        for block in content:
-            if isinstance(block, dict) and 'text' in block:
-                full_text += block['text']
-        print(f"📝 CONTENU : {full_text}")
-        
     if hasattr(message_object, 'tool_calls') and message_object.tool_calls:
         for tool in message_object.tool_calls:
             print(f"🛠️ APPEL OUTIL : {tool['name']} avec args={tool['args']}")
@@ -175,25 +286,24 @@ Mais n'oublie JAMAIS LE FORMAT DE L'HEURE LOCALE dans le cas ou l'heure peut êt
     # print(res)
 
     # ALL datas are available for the computation 
-    final_city = update_if_valid(state.get("detected_city"),res.city)
-    final_hour = update_if_valid(state.get("hour"),res.hour)
-    coords, timezone = get_coordinates(final_city)
-    latitude,longitude = coords
+    final_city = update_if_valid(state.get("detected_city"), res.city)
+    final_city = final_city or state.get("detected_city") or "Paris"
+    final_hour = update_if_valid(state.get("hour"), res.hour)
+
+    coords, timezone = resolve_city_to_coords_and_tz(final_city)
+    latitude, longitude = coords
     final_mission = res.mission
 
-    is_live = res.live_time
-
-    if res.intent == "education" or res.hour is None:
-        is_live = True
+    is_live = bool(res.live_time) or (res.intent == "education") or (final_hour is None)
 
     print("Timezone =", timezone)
-    if (is_live): # On parle d'actuellement pas besoin du llm juste de .now()
+    if is_live:
         tz = ZoneInfo(timezone)
         local_now = datetime.now(tz)
         final_utc = local_now.astimezone(ZoneInfo("UTC"))
-    else: # On passe en UTC puisque l'heure donnée est locale (ex: 18h à moscou)
-        local_now = final_hour
-        final_utc = get_utc_date(timezone, final_hour)
+    else:
+        local_now = datetime.now(ZoneInfo(timezone))
+        final_utc = resolve_local_time_to_utc(timezone, final_hour, local_now)
 
     print("- Valeur gardé et envoyé à l'astronomer \n Intent :", res.intent, "\n Mission : ", final_mission, " \n Ville : ",final_city, "\n Heure locale : ", local_now, "\n Heure UTC : ", final_utc)
     constraint = get_celestial_constraint(latitude, longitude, final_utc)
@@ -239,11 +349,7 @@ def astronomer(state = AgentState):
     res = llm_with_tools.invoke(final_message)
     print_clean_debug("Astro", res)
 
-    raw_content = res.content
-    
-    if isinstance(raw_content, list):
-        raw_content = "".join([block["text"] for block in raw_content if block.get("type") == "text"])
-
+    raw_content = extract_text_from_content(res.content)
     clean_text = raw_content.replace("```json", "").replace("```", "").strip()
 
     try:

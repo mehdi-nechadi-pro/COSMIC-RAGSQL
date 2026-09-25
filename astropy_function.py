@@ -1,71 +1,106 @@
-from datetime import datetime
+import math
+import re
+from datetime import datetime, timedelta
+from functools import lru_cache
+from zoneinfo import ZoneInfo
+
 from astropy import units as u
-from geopy.geocoders import Nominatim
-from astropy.coordinates import EarthLocation, get_sun, AltAz, solar_system_ephemeris, get_body
+from astropy.coordinates import AltAz, EarthLocation, get_body, get_sun, solar_system_ephemeris
 from astropy.time import Time
 from dateutil import parser
-import math
+from geopy.geocoders import Nominatim
 from timezonefinder import TimezoneFinder
 import pytz
-from functools import lru_cache
 
 geolocator = Nominatim(user_agent="mon_astro_app_v1")
+tf = TimezoneFinder()
+
+TIME_TOKEN_RULES = {
+    "maintenant": None,
+    "now": None,
+    "ce soir": "20:00",
+    "tonight": "20:00",
+    "demain matin": "06:00",
+    "tomorrow morning": "06:00",
+}
+
 
 @lru_cache(maxsize=128)
 def get_coordinates(city_name: str):
-    # print("Get Coords : ", city_name)
     """
-    Prend un nom de ville (ex: 'Lyon') et renvoie (lat, lon) et la timezone.
-    Renvoie None si introuvable.
+    Prend un nom de ville et renvoie (lat, lon) et la timezone.
+    Retourne toujours une paire cohérente ou lève une erreur contrôlée au niveau appelant.
     """
     try:
         location = geolocator.geocode(city_name)
-        if not location:            
-            return None, "UTC"
-        
+        if not location:
+            return (None, None), "UTC"
+
         lat = location.latitude
         lon = location.longitude
         tz_str = tf.timezone_at(lng=lon, lat=lat) or "UTC"
         return (lat, lon), tz_str
-    
+
     except Exception as e:
         print(f"Erreur Geocoding : {e}")
-        return None
+        return (None, None), "UTC"
 
-tf = TimezoneFinder()
+
+def resolve_city_to_coords_and_tz(city_name: str):
+    coords, tz_name = get_coordinates(city_name)
+    if coords[0] is None or coords[1] is None:
+        raise ValueError(f"Ville introuvable ou non resolvable : {city_name}")
+    return coords, tz_name
+
+
+def resolve_local_time_to_utc(timezone_name: str, user_input_str: str = "", now_local: datetime | None = None) -> datetime:
+    """
+    Centralise la conversion d'une heure locale humaine vers UTC.
+    Le LLM ne doit plus fournir le datetime final ; il fournit seulement un contexte.
+    """
+    target_tz = ZoneInfo(timezone_name) if timezone_name else ZoneInfo("UTC")
+    if now_local is None:
+        now_local = datetime.now(target_tz)
+
+    clean_str = (user_input_str or "").strip()
+    if clean_str == "":
+        return now_local.astimezone(ZoneInfo("UTC"))
+
+    normalized = clean_str.lower().strip()
+    for key, value in TIME_TOKEN_RULES.items():
+        if normalized == key:
+            if value is None:
+                return now_local.astimezone(ZoneInfo("UTC"))
+            hh, mm = map(int, value.split(":"))
+            candidate = now_local.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if candidate <= now_local:
+                candidate += timedelta(days=1)
+            return candidate.astimezone(ZoneInfo("UTC"))
+
+    match = re.search(r"(demain|tomorrow).*?(\d{1,2})\s*(?:h|heure|:)?\s*(\d{0,2})", normalized)
+    if match:
+        hour = int(match.group(2))
+        minute = int(match.group(3)) if match.group(3) else 0
+        candidate = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate <= now_local:
+            candidate += timedelta(days=1)
+        return candidate.astimezone(ZoneInfo("UTC"))
+
+    try:
+        parsed = parser.parse(clean_str, default=now_local)
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(ZoneInfo("UTC"))
+        local_dt = parsed.replace(tzinfo=target_tz)
+        return local_dt.astimezone(ZoneInfo("UTC"))
+    except (ValueError, TypeError):
+        return now_local.astimezone(ZoneInfo("UTC"))
 
 
 def get_utc_date(timezone, user_input_str: str = "") -> datetime:
-    """
-    Transforme l'input du LLM en UTC grâce à l'heure locale et la timezone
-    """
-    now_utc = datetime.now(pytz.utc)
-
-    if not user_input_str or user_input_str.strip() == "":
-        return now_utc
-
-    target_tz = pytz.timezone(timezone) if timezone else pytz.utc
-
-    default_dt = now_utc.astimezone(target_tz)
-
-    try:
-        clean_str = user_input_str.strip()
-
-        parsed = parser.parse(clean_str, default=default_dt)
-
-        if parsed.tzinfo is not None and parsed.tzinfo.utcoffset(parsed) is not None:
-            final_utc = parsed.astimezone(pytz.utc)
-
-        else:
-            local_dt = target_tz.localize(parsed)
-            final_utc = local_dt.astimezone(pytz.utc)
-            
-    except (ValueError, TypeError) as e:
-        print(f"🔥 Erreur parsing '{user_input_str}', fallback NOW.")
-        final_utc = now_utc
-    
-    # print("Get Target UTC (" ",",user_input_str,  ": LOCAL) -> ",final_utc ," ")
-    return final_utc
+    """Compatibilité: garde l'ancien nom et délègue au système unifié."""
+    tz_name = timezone or "UTC"
+    now_local = datetime.now(ZoneInfo(tz_name)) if tz_name != "UTC" else datetime.now(ZoneInfo("UTC"))
+    return resolve_local_time_to_utc(tz_name, user_input_str, now_local)
 
 def maths_altitude(ra, dec, lat, lst, min_alt=0):
     """

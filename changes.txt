@@ -1,0 +1,3 @@
+Changer la temporalité -> le LLM doit extraire des intentions pas faire le UTC etc
+Changer la création de la requête -> Le LLM ne doit pas faire la requête il doit juste transmettre des filtres (lancer des calculs) c'est tout
+Uniformiser history (listes/tuples etc)
