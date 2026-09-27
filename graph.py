@@ -1,14 +1,12 @@
 from datetime import datetime, timezone
 import json
-import locale
 import os
-import re
 import sqlite3
 from typing import Annotated, Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from sqlalchemy import MetaData, Table, create_engine, event, select
+from sqlalchemy import MetaData, Table, create_engine, event, or_, select, text
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph
 from langgraph.graph.message import add_messages
@@ -17,44 +15,48 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.utilities import SQLDatabase
 from astropy_function import (
     get_celestial_constraint,
-    get_utc_date,
     maths_altitude,
     resolve_city_to_coords_and_tz,
-    resolve_local_time_to_utc,
     get_visible_solar_system_objects,
 )
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode, tools_condition
-from prompts import UNIVERSAL_ASTRONOMER_PROMPT, VULGARISATION_PROMPT
+from prompts import ORCHESTRATOR_PROMPT, UNIVERSAL_ASTRONOMER_PROMPT, VULGARISATION_PROMPT
+from time_utils import (
+    TimeRequest,
+    default_time_request,
+    resolve_time_request,
+)
 
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 class AgentState(TypedDict):
     city: str   # "Lyon", "Paris"
-    hour: str   # "2025-12-30 17:29:45.285278"
-    local_hour: str
+    time_request: Optional[TimeRequest]
+    observation_time_utc: datetime
     intent: str  # "Observation", "education"
     infos: str  # "Whats the best nebula we can see ?"
     vulgarisation_output: str   # "Here is what you can see"
+    chat_reply: str
     messages: Annotated[list, add_messages] # Historique des messages
     final_target: List[Dict[str, Any]] # JSON OBJETS TROUVES
     detected_city: Optional[str] = Field(description="Nom de la ville demandée par l'user, si différente de l'actuelle.")
     latitude: float
     longitude: float
-    sql_where: str
-    planets: str
+    sql_where: Dict[str, Any]
+    planets: Dict[str, Any]
     timezone: str
     constellations_target: List[str]
 graph_builder = StateGraph(AgentState)
 
 llm_pro = ChatGoogleGenerativeAI(
-        model="gemini-3.6-flash",
+        model="gemini-3.5-flash-lite",
         google_api_key=GOOGLE_API_KEY,
         temperature=0
 )
 llm_lite = ChatGoogleGenerativeAI(
-        model="gemini-3.6-flash-lite",
+        model="gemini-3.5-flash-lite",
         google_api_key=GOOGLE_API_KEY,
         temperature=0
 )
@@ -62,16 +64,8 @@ llm_lite = ChatGoogleGenerativeAI(
 class RoutingAndExtraction(BaseModel):
     intent: str     #"observation" ou "education"
     city: Optional[str] = Field(None)     
-    hour: Optional[str] = Field(None) 
-    live_time: Optional[bool] # true si seul le marqueur temporel est la
-    mission: Optional[str] # Reformule si la demande n'est pas complète
-
-def update_if_valid(current_val, new_val):
-    bad_values = ["null", "Null", "None", "", None]
-    # print("APPEL UPDATE -- current=", current_val, " new=", new_val)
-    if new_val in bad_values:
-        return current_val
-    return new_val
+    time: TimeRequest | None = None
+    mission: Optional[str]
 
 ALLOWED_TARGET_FILTER_KEYS = {
     "name",
@@ -80,9 +74,19 @@ ALLOWED_TARGET_FILTER_KEYS = {
     "catalogue",
     "magnitude_min",
     "magnitude_max",
+    "ra_min",
+    "ra_max",
+    "dec_min",
+    "dec_max",
     "limit",
 }
 MAX_TARGET_LIMIT = 50
+ACTIVE_VISIBILITY_SQL = ""
+
+
+def set_active_visibility_sql(sql_expression: Optional[str]) -> None:
+    global ACTIVE_VISIBILITY_SQL
+    ACTIVE_VISIBILITY_SQL = sql_expression.strip() if sql_expression else ""
 
 
 class TargetFilters(BaseModel):
@@ -92,6 +96,10 @@ class TargetFilters(BaseModel):
     catalogue: Optional[str] = None
     magnitude_min: Optional[float] = Field(default=None, ge=0.0)
     magnitude_max: Optional[float] = Field(default=None, ge=0.0)
+    ra_min: Optional[float] = Field(default=None, ge=0.0, le=360.0)
+    ra_max: Optional[float] = Field(default=None, ge=0.0, le=360.0)
+    dec_min: Optional[float] = Field(default=None, ge=-90.0, le=90.0)
+    dec_max: Optional[float] = Field(default=None, ge=-90.0, le=90.0)
     limit: int = Field(default=8, ge=1, le=MAX_TARGET_LIMIT)
 
 
@@ -127,13 +135,18 @@ def validate_target_filters(filters_json: Any) -> Dict[str, Any]:
     return cleaned
 
 
-def build_targets_query(filters: Dict[str, Any], engine):
+def build_targets_query(filters: Dict[str, Any], engine, visibility_sql: Optional[str] = None):
     metadata = MetaData()
     celestial = Table("Celestial", metadata, autoload_with=engine)
     conditions = []
+    ra_min = filters.get("ra_min")
+    ra_max = filters.get("ra_max")
 
     for field, value in filters.items():
         if field == "limit":
+            continue
+
+        if field in {"ra_min", "ra_max", "dec_min", "dec_max"}:
             continue
 
         column = getattr(celestial.c, field, None)
@@ -146,6 +159,25 @@ def build_targets_query(filters: Dict[str, Any], engine):
             conditions.append(column >= value)
         elif field == "magnitude_max":
             conditions.append(column <= value)
+
+    if ra_min is not None and ra_max is not None and ra_min > ra_max:
+        conditions.append(or_(celestial.c.ra >= ra_min, celestial.c.ra <= ra_max))
+    else:
+        if ra_min is not None:
+            conditions.append(celestial.c.ra >= ra_min)
+        if ra_max is not None:
+            conditions.append(celestial.c.ra <= ra_max)
+
+    if filters.get("dec_min") is not None:
+        conditions.append(celestial.c.dec >= filters["dec_min"])
+    if filters.get("dec_max") is not None:
+        conditions.append(celestial.c.dec <= filters["dec_max"])
+
+    if visibility_sql:
+        visibility_sql = visibility_sql.strip()
+        if not visibility_sql.endswith("= 1") and not visibility_sql.endswith("=1"):
+            visibility_sql = f"({visibility_sql}) = 1"
+        conditions.append(text(visibility_sql))
 
     stmt = select(celestial).where(*conditions).limit(filters.get("limit", 8))
     return stmt
@@ -160,12 +192,19 @@ def search_targets(filters_json: dict) -> str:
     """
     try:
         cleaned_filters = validate_target_filters(filters_json)
-        query = build_targets_query(cleaned_filters, engine)
+        query = build_targets_query(cleaned_filters, engine, ACTIVE_VISIBILITY_SQL)
         with engine.connect() as conn:
             rows = conn.execute(query).mappings().all()
         return json.dumps([dict(row) for row in rows])
     except Exception as exc:  # pragma: no cover - defensive guard
         return json.dumps({"error": str(exc)})
+
+
+def run_tools(state):
+    try:
+        return tool_node.invoke(state)
+    finally:
+        set_active_visibility_sql("")
 
 
 def _register_custom_functions(dbapi_connection, connection_record):
@@ -220,12 +259,12 @@ def print_clean_debug(step_name, message_object):
     """Affiche le contenu du LLM proprement en virant la signature Google."""
     content = message_object.content
     
-    print(f"\n--- 🔍 DEBUG {step_name} ---")
-    print(f"📝 CONTENU : {extract_text_from_content(content)}")
+    print(f"\n--- DEBUG {step_name} ---")
+    print(f" CONTENU : {extract_text_from_content(content)}")
     
     if hasattr(message_object, 'tool_calls') and message_object.tool_calls:
         for tool in message_object.tool_calls:
-            print(f"🛠️ APPEL OUTIL : {tool['name']} avec args={tool['args']}")
+            print(f" APPEL OUTIL : {tool['name']} avec args={tool['args']}")
 
     print("-" * 30)
 
@@ -235,91 +274,58 @@ def orchestrateur(state = AgentState):
 
     history = state.get("messages", [])
 
-    try:
-        locale.setlocale(locale.LC_TIME, 'fr_FR.UTF-8') 
-    except:
-        pass
-    now = datetime.now()
-
-    current_time_str = now.strftime("%Y-%m-%d %H:%M:%S") 
-    current_day_str = now.strftime("%A %d %B %Y")
+    now_utc = datetime.now(timezone.utc)
     city = state.get("detected_city")
 
     system_msg = {
-        "role": "system", 
-        "content": f"""
---- CONTEXTE TEMPOREL CRITIQUE ---
-Date et Heure Système Actuelles : {current_time_str} à "Villeurbanne"
-Nous sommes le : {current_day_str} 
-Ville actuellement connue par le système : {city}
-----------------------------------
-RÈGLE ABSOLUE : Utilise cette date comme référence unique pour "aujourd'hui", "ce soir", "demain".
-MODIFIE LA VILLE UNIQUEMENT si elle est donnée dans le prompt
-NE DEVINE PAS L'ANNÉE. L'année est {now.year}.
-----------------------------------
-Tu es un extracteur astronome.
-Extrais l'intention ("observation" ou "education").
-Extrais l'heure et le lieu SI ils sont donnés.
-INTERDICTION D'HALLUCINER, si une ou plusieurs des valeurs sont non trouvés RENVOIE RIEN
-Detected_city peut aussi être rempli de cette façon "Ville, Pays" en cas d'ambiguité
-Tu dois reformuler la demande à l'aide de l'historique des messages de l'UTILISATEUR si la demande est tronqué : dans mission
-Ex: Première entrée : Que voir comme nébula à Tokyo ?, Deuxième entrée : Et comme galaxie ? -> tu met mission= Que voir à Tokyo comme galaxie
-
-TU feras la différence entre ces 2 cas pour la date/heure : 
-
-- L'heure est donnée dans l'input ou peut-être déduis -> on part du principe que l'heure est en local donc on renvoie ça directement et on met live_time = false
-(ex : 18h à tokyo) -> on renvoie betement 18h sous le format : "2050-01-01T18:00:00". 
-(ex2 : ce soir à tokyo) -> on déduis soir = 20h (globalement) et on renvoie sous le format : "2050-01-01T20:00:00" 
-
-- L'heure n'est pas donnée et le seul marqueur temporel est présent est "maintenant" ou un équivalent =->  
-(ex : maintenant à tokyo) -> On prend {current_time_str} on renvoie ça ET on met live_time = true
-(ex2: que voir à tokyo) -> Pareil (On prend {current_time_str} on renvoie ça ET on met live_time = true)
-
-Tu pourras aussi retourner des dates du passés si l'utilisateur le souhaite.
-Mais n'oublie JAMAIS LE FORMAT DE L'HEURE LOCALE dans le cas ou l'heure peut être déduit/est donnée.
-"""
-}
+        "role": "system",
+        "content": ORCHESTRATOR_PROMPT.format(
+            current_time_str=now_utc.isoformat(),
+            current_day_str=now_utc.astimezone().strftime("%A %d %B %Y"),
+            city=city or "inconnue",
+            now=now_utc,
+        ),
+    }
 
     final_message = [system_msg] + history
     res = structured_llm.invoke(final_message)
-
-    # print(res)
-
-    # ALL datas are available for the computation 
-    final_city = update_if_valid(state.get("detected_city"), res.city)
-    final_city = final_city or state.get("detected_city") or "Paris"
-    final_hour = update_if_valid(state.get("hour"), res.hour)
-
-    coords, timezone = resolve_city_to_coords_and_tz(final_city)
+    print(f"[TIME] TimeRequest renvoyé par le LLM : {res.time!r}")
+    
+    final_city = (res.city or "").strip()
+    if final_city.lower() in {"", "none", "null"}:
+        final_city = state.get("detected_city") or "Paris"
+    coords, timezone_name = resolve_city_to_coords_and_tz(final_city)
     latitude, longitude = coords
     final_mission = res.mission
 
-    is_live = bool(res.live_time) or (res.intent == "education") or (final_hour is None)
+    print("Timezone =", timezone_name)
+    time_request = res.time
 
-    print("Timezone =", timezone)
-    if is_live:
-        tz = ZoneInfo(timezone)
-        local_now = datetime.now(tz)
-        final_utc = local_now.astimezone(ZoneInfo("UTC"))
-    else:
-        local_now = datetime.now(ZoneInfo(timezone))
-        final_utc = resolve_local_time_to_utc(timezone, final_hour, local_now)
+    if time_request is None:
+        time_request = state.get("time_request")
 
-    print("- Valeur gardé et envoyé à l'astronomer \n Intent :", res.intent, "\n Mission : ", final_mission, " \n Ville : ",final_city, "\n Heure locale : ", local_now, "\n Heure UTC : ", final_utc)
-    constraint = get_celestial_constraint(latitude, longitude, final_utc)
-    planets = get_visible_solar_system_objects(latitude, longitude, final_utc)
+    if time_request is None:
+        time_request = default_time_request()
+
+    observation_time_utc = resolve_time_request(time_request, timezone_name, now_utc)
+    target_local = observation_time_utc.astimezone(ZoneInfo(timezone_name))
+    print("- Valeur gardée et envoyée à l'astronomer\n Intent :", res.intent,
+          "\n Mission :", final_mission, "\n Ville :", final_city,
+          "\n Heure locale :", target_local, "\n Heure UTC :", observation_time_utc)
+    constraint = get_celestial_constraint(latitude, longitude, observation_time_utc)
+    planets = get_visible_solar_system_objects(latitude, longitude, observation_time_utc)
     print("- Valeur de calcul stockée : \n Erreur_Soleil: ", constraint.get("error"), " \n Planetes visibles : ", [obj['name'] for obj in planets.get("observables")], "\n ----------------------------------------") 
 
     return {"intent": res.intent,
             "detected_city": final_city,
-            "hour": final_utc,
+            "time_request": time_request,
+            "observation_time_utc": observation_time_utc,
             "latitude": latitude,
             "longitude": longitude,
             "sql_where": constraint,
             "planets": planets,
-            "timezone" : timezone,
-            "local_hour": local_now,
-            "infos": final_mission,} # Instruction modifié par l'orchestrateur puisqu'il a l'historique 
+            "timezone" : timezone_name,
+            "infos": final_mission,} 
 
 def astronomer(state = AgentState):
     print("--------- Entrée Astronomer ---------")
@@ -328,9 +334,10 @@ def astronomer(state = AgentState):
     system_message = SystemMessage(content=UNIVERSAL_ASTRONOMER_PROMPT.format(
         schema=schema_brut,
         city=state.get("detected_city"),
-        hour=state.get("hour"),
+        hour=state.get("observation_time_utc"),
         mission=mission_finale,
         sql_where=state.get("sql_where"),
+        sun_error=state.get("sql_where", {}).get("error", ""),
         planets=state.get("planets")
     ))
     human_instruction = HumanMessage(content=f"Instruction : {mission_finale}")
@@ -346,7 +353,15 @@ def astronomer(state = AgentState):
     
     final_message = [system_message, human_instruction] + working_memory
 
-    res = llm_with_tools.invoke(final_message)
+    set_active_visibility_sql(state.get("sql_where", {}).get("sql_where") or "")
+    try:
+        res = llm_with_tools.invoke(final_message)
+    except Exception:
+        set_active_visibility_sql("")
+        raise
+
+    if not res.tool_calls:
+        set_active_visibility_sql("")
     print_clean_debug("Astro", res)
 
     raw_content = extract_text_from_content(res.content)
@@ -363,6 +378,7 @@ def astronomer(state = AgentState):
         
         return {
             "messages": [final_msg], 
+            "chat_reply": chat_reply,
             "final_target": final_target,
             "constellations_target": constellations_target
         }
@@ -370,21 +386,27 @@ def astronomer(state = AgentState):
     except json.JSONDecodeError:
         return {
             "messages": [res], 
+            "chat_reply": extract_text_from_content(res.content),
             "final_target": [],
             "constellations_target": []
         }
 
 def vulgarisation(state = AgentState):
-    last_message = state["messages"][-1].content
+    print("--------- Entrée Vulgarisateur ---------")
 
     prompt = VULGARISATION_PROMPT.format(
-            last_message=last_message,
-        )
+        mission=state.get("infos") or "Question d'astronomie générale",
+        city=state.get("detected_city") or "inconnue",
+        timezone=state.get("timezone") or "UTC",
+        observation_time_utc=state.get("observation_time_utc") or "inconnu",
+        sun_error=state.get("sql_where", {}).get("error", "aucune contrainte"),
+        planets=state.get("planets") or {"observables": []},
+    )
 
     res = llm_lite.invoke(prompt)
+    print(res)
 
-    state.get("detected_city"), " lat/lon= (", state.get("latitude"), ",", state.get("longitude")
-    return {"vulgarisation_output": res.content}
+    return {"vulgarisation_output": extract_text_from_content(res.content)}
 
 
 def orchestr_switch(state = AgentState):
@@ -397,7 +419,7 @@ dict_ = {'astronome':'astro', 'vulgaris':'vulga'}
 
 graph_builder.add_node("orchest", orchestrateur)
 graph_builder.add_node("astro", astronomer)
-graph_builder.add_node("tools", tool_node)
+graph_builder.add_node("tools", run_tools)
 graph_builder.add_node("vulga", vulgarisation)
 
 graph_builder.set_entry_point("orchest")
@@ -409,32 +431,4 @@ graph_builder.set_finish_point("vulga")
 
 graph = graph_builder.compile()
 
-
-def getReponse(prompt):
-    print(prompt)
-    now_utc = datetime.now(timezone.utc)
-    iso_string = now_utc.isoformat().replace("+00:00", "Z")
-    initial_state = {
-        "infos": prompt,
-        "latitude": 45.76936700000001,
-        "longitude": 4.893746,
-        "hour": iso_string,
-        "final_target": [],
-        "messages": [("user", prompt)] ,
-        "detected_city": 'Villeurbanne'
-    }
-    #orchestrateur(initial_state) # Appel uniquement le noeud Orchestrateur
-    graph.invoke(initial_state) # Appel tout le graph
-
-# for i in range(1):
-    # getReponse("Que voir il y a deux ans pile ?")
-    # getReponse("Que voir à moscou ?")
-    # getReponse("Que voir à los angeles ?")
-    # getReponse("Que voir à los angeles au Chili ?")
-#     getReponse("Que voir ?")
-#     getReponse("Que voir à Moscou?")
-#     getReponse("Que voir ce soir à Moscou?")
-#     getReponse("Que voir à Tokyo?")
-#     getReponse("Que voir ce soir à Moscou?")
-#     getReponse("Que voir à 18h à Moscou?")
 

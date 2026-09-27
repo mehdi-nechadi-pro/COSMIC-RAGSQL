@@ -1,6 +1,6 @@
 import math
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
@@ -14,16 +14,6 @@ import pytz
 
 geolocator = Nominatim(user_agent="mon_astro_app_v1")
 tf = TimezoneFinder()
-
-TIME_TOKEN_RULES = {
-    "maintenant": None,
-    "now": None,
-    "ce soir": "20:00",
-    "tonight": "20:00",
-    "demain matin": "06:00",
-    "tomorrow morning": "06:00",
-}
-
 
 @lru_cache(maxsize=128)
 def get_coordinates(city_name: str):
@@ -53,55 +43,6 @@ def resolve_city_to_coords_and_tz(city_name: str):
     return coords, tz_name
 
 
-def resolve_local_time_to_utc(timezone_name: str, user_input_str: str = "", now_local: datetime | None = None) -> datetime:
-    """
-    Centralise la conversion d'une heure locale humaine vers UTC.
-    Le LLM ne doit plus fournir le datetime final ; il fournit seulement un contexte.
-    """
-    target_tz = ZoneInfo(timezone_name) if timezone_name else ZoneInfo("UTC")
-    if now_local is None:
-        now_local = datetime.now(target_tz)
-
-    clean_str = (user_input_str or "").strip()
-    if clean_str == "":
-        return now_local.astimezone(ZoneInfo("UTC"))
-
-    normalized = clean_str.lower().strip()
-    for key, value in TIME_TOKEN_RULES.items():
-        if normalized == key:
-            if value is None:
-                return now_local.astimezone(ZoneInfo("UTC"))
-            hh, mm = map(int, value.split(":"))
-            candidate = now_local.replace(hour=hh, minute=mm, second=0, microsecond=0)
-            if candidate <= now_local:
-                candidate += timedelta(days=1)
-            return candidate.astimezone(ZoneInfo("UTC"))
-
-    match = re.search(r"(demain|tomorrow).*?(\d{1,2})\s*(?:h|heure|:)?\s*(\d{0,2})", normalized)
-    if match:
-        hour = int(match.group(2))
-        minute = int(match.group(3)) if match.group(3) else 0
-        candidate = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if candidate <= now_local:
-            candidate += timedelta(days=1)
-        return candidate.astimezone(ZoneInfo("UTC"))
-
-    try:
-        parsed = parser.parse(clean_str, default=now_local)
-        if parsed.tzinfo is not None:
-            return parsed.astimezone(ZoneInfo("UTC"))
-        local_dt = parsed.replace(tzinfo=target_tz)
-        return local_dt.astimezone(ZoneInfo("UTC"))
-    except (ValueError, TypeError):
-        return now_local.astimezone(ZoneInfo("UTC"))
-
-
-def get_utc_date(timezone, user_input_str: str = "") -> datetime:
-    """Compatibilité: garde l'ancien nom et délègue au système unifié."""
-    tz_name = timezone or "UTC"
-    now_local = datetime.now(ZoneInfo(tz_name)) if tz_name != "UTC" else datetime.now(ZoneInfo("UTC"))
-    return resolve_local_time_to_utc(tz_name, user_input_str, now_local)
-
 def maths_altitude(ra, dec, lat, lst, min_alt=0):
     """
     Prend un RA/DEC d'un objet et la latitude et le LST d'une localisation
@@ -123,7 +64,7 @@ def maths_altitude(ra, dec, lat, lst, min_alt=0):
     except:
         return 0
 
-def get_celestial_constraint(lat: float, lon: float, time_utc: str = "") -> str:
+def get_celestial_constraint(lat: float, lon: float, time_utc: datetime | str = "") -> dict:
     """
     Calcule les contraintes d'Ascension Droite (RA) et de Déclinaison (DEC) 
     pour une ville et une heure données.
@@ -151,14 +92,14 @@ def get_celestial_constraint(lat: float, lon: float, time_utc: str = "") -> str:
             "lst_hms": lst.to_string(unit=u.hour, sep='hms')
         }
     
-    constraint = f""" IS_VISIBLE(ra,dec,{lat}, {lst_hours}, 5)"""
+    constraint = f"IS_VISIBLE(ra, dec, {lat}, {lst_hours}, 5) = 1"
     return {
-    "error" : "",
-    "sql_where": constraint,    
+    "error": "",
+    "sql_where": constraint,
     "lst_hms": lst.to_string(unit=u.hour, sep='hms')
 }
 
-def get_visible_solar_system_objects(lat:str, lon:str, time_utc: str):
+def get_visible_solar_system_objects(lat: float, lon: float, time_utc: datetime | str):
     """
     Simplifié : Renvoie un booléen 'is_daytime' et la liste 'observables'.
     Si il fait jour, la liste ne contient QUE le Soleil/Lune (si levés).

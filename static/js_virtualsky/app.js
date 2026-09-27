@@ -4,9 +4,8 @@
     let currentUserState = {
         lat: 48.8566, 
         long: 2.3522, 
-        hour: new Date().toISOString(), // UTC Strict
+        observation_time_utc: new Date().toISOString(),
         city: "Paris",
-        local_hour: new Date().toISOString()
     };
     let targets = {}
     let conversationHistory = [];
@@ -55,7 +54,7 @@
                 body: JSON.stringify({ 
                     message: text, 
                     city: currentUserState.city, 
-                    hour: currentUserState.hour, 
+                    observation_time_utc: currentUserState.observation_time_utc,
                     latitude: currentUserState.lat, 
                     longitude: currentUserState.long,
                     history: conversationHistory,
@@ -64,28 +63,29 @@
             
             // Get result from the back-end
             const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || "Erreur du serveur");
             document.querySelector(".temporary")?.remove();
-            addMessage(data.reply, "bot", data.targets);
+            const responseTargets = Array.isArray(data.targets) ? data.targets : [];
+            addMessage(data.reply || "Pas de réponse générée.", "bot", responseTargets);
             conversationHistory.push({ role: "ai", content: data.reply });
             
             // Update currentUserState
             if (data.detected_city) currentUserState.city = data.detected_city;
-            if (data.hour) currentUserState.hour = data.hour;
+            if (data.observation_time_utc) currentUserState.observation_time_utc = data.observation_time_utc;
             if (data.latitude) currentUserState.lat = data.latitude;
             if (data.longitude) currentUserState.long = data.longitude;
-            if (data.local_hour) currentUserState.local_hour = data.local_hour;
             
             console.log("Reception : ",currentUserState)
 
             // Update Date/Hour/Location on the map
-            Update_info_box(data.detected_city, data.hour,  data.local_hour, data.latitude, data.longitude)
+            Update_info_box(data.detected_city, data.observation_time_utc, data.observation_time_local, data.latitude, data.longitude)
             
             // Create the Map and add the targets pointers
             var constellations_names = data.constellations
             console.log(constellations_names)
-            var targets = data.targets;
+            var targets = responseTargets;
             if (targets && targets.length > 0) {
-                createMap(parseFloat(data.latitude), parseFloat(data.longitude), data.hour);
+                createMap(parseFloat(data.latitude), parseFloat(data.longitude), data.observation_time_utc);
                 // console.log(targets)
                 targets.forEach(obj => {
                     planetarium.addPointer({
@@ -94,7 +94,7 @@
                 })
                         
             } else {
-                createMap(currentUserState.lat, currentUserState.long, currentUserState.hour);
+                createMap(currentUserState.lat, currentUserState.long, currentUserState.observation_time_utc);
             }
             
             // We show the constellations
@@ -117,14 +117,14 @@
             }
         }
 
-    function addMessage(text, className, _targets = {}) {
+    function addMessage(text, className, _targets = []) {
         console.log("TARGET : ", targets)
         var chatDiv = document.getElementById("chat-history");
         var msgDiv = document.createElement("div");
         var objDiv = document.createElement("div");
-        targets = _targets
+        targets = Array.isArray(_targets) ? _targets : []
 
-        if (Object.keys(targets).length === 0) { // If targets is null we return the reply component 
+        if (targets.length === 0) { // If there are no targets, render only the reply.
             msgDiv.className = "msg " + className;
             msgDiv.innerHTML = text; 
         } else { // We create cards components for the target objects
@@ -409,12 +409,12 @@ $(document).ready(function() {
     function unlockInterface(cityName) {
         currentUserState.city = cityName;
         
-        // createMap(currentUserState.lat, currentUserState.long, currentUserState.hour);
+        // createMap(currentUserState.lat, currentUserState.long, currentUserState.observation_time_utc);
         
         Update_info_box(
             currentUserState.city, 
-            currentUserState.hour, 
-            currentUserState.local_hour, 
+            currentUserState.observation_time_utc,
+            currentUserState.observation_time_utc,
             currentUserState.lat, 
             currentUserState.long
         );
@@ -434,7 +434,7 @@ $(document).ready(function() {
             }, 
             (error) => {
                 console.warn("⚠️ Échec GPS ou refus user. Fallback sur Paris.");
-                unlockInterface("Paris (Par défaut)");
+                unlockInterface("Paris");
             },
             { timeout: 10000 } // Important : abandonne si le GPS met plus de 10s
         );
