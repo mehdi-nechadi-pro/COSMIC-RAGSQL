@@ -21,7 +21,9 @@ from astropy_function import (
 )
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode, tools_condition
+from debug_utils import extract_text_from_content, print_clean_debug
 from prompts import ORCHESTRATOR_PROMPT, UNIVERSAL_ASTRONOMER_PROMPT, VULGARISATION_PROMPT
+from sql_utils import build_targets_query, validate_target_filters
 from time_utils import (
     TimeRequest,
     default_time_request,
@@ -45,7 +47,7 @@ class AgentState(TypedDict):
     latitude: float
     longitude: float
     sql_where: Dict[str, Any]
-    planets: Dict[str, Any]
+    solar_system_objects: Dict[str, Any]
     timezone: str
     constellations_target: List[str]
 graph_builder = StateGraph(AgentState)
@@ -67,120 +69,10 @@ class RoutingAndExtraction(BaseModel):
     time: TimeRequest | None = None
     mission: Optional[str]
 
-ALLOWED_TARGET_FILTER_KEYS = {
-    "name",
-    "type",
-    "constellation",
-    "catalogue",
-    "magnitude_min",
-    "magnitude_max",
-    "ra_min",
-    "ra_max",
-    "dec_min",
-    "dec_max",
-    "limit",
-}
-MAX_TARGET_LIMIT = 50
-ACTIVE_VISIBILITY_SQL = ""
-
 
 def set_active_visibility_sql(sql_expression: Optional[str]) -> None:
     global ACTIVE_VISIBILITY_SQL
     ACTIVE_VISIBILITY_SQL = sql_expression.strip() if sql_expression else ""
-
-
-class TargetFilters(BaseModel):
-    name: Optional[str] = None
-    type: Optional[str] = None
-    constellation: Optional[str] = None
-    catalogue: Optional[str] = None
-    magnitude_min: Optional[float] = Field(default=None, ge=0.0)
-    magnitude_max: Optional[float] = Field(default=None, ge=0.0)
-    ra_min: Optional[float] = Field(default=None, ge=0.0, le=360.0)
-    ra_max: Optional[float] = Field(default=None, ge=0.0, le=360.0)
-    dec_min: Optional[float] = Field(default=None, ge=-90.0, le=90.0)
-    dec_max: Optional[float] = Field(default=None, ge=-90.0, le=90.0)
-    limit: int = Field(default=8, ge=1, le=MAX_TARGET_LIMIT)
-
-
-def validate_target_filters(filters_json: Any) -> Dict[str, Any]:
-    if filters_json is None:
-        return {"limit": 8}
-
-    if not isinstance(filters_json, dict):
-        raise ValueError("filters_json must be a dictionary, not raw SQL text.")
-
-    unknown = set(filters_json.keys()) - ALLOWED_TARGET_FILTER_KEYS
-    if unknown:
-        raise ValueError(
-            f"Unknown target filter(s): {sorted(unknown)}. "
-            f"Allowed keys: {sorted(ALLOWED_TARGET_FILTER_KEYS)}"
-        )
-
-    prohibited_sql = {"query", "sql", "raw_sql", "statement", "command"}
-    if prohibited_sql.intersection(filters_json):
-        raise ValueError("Raw SQL payloads are forbidden. Send validated filters only.")
-
-    for key, value in filters_json.items():
-        if isinstance(value, str):
-            lowered = value.lower()
-            if any(token in lowered for token in ["select", "insert", "update", "delete", "drop", "alter", "truncate", "union", "--", ";"]):
-                raise ValueError("String values must not contain raw SQL clauses or separators.")
-            if any(keyword in lowered for keyword in ["from ", "where ", "join ", "order by", "group by"]):
-                raise ValueError("String values must not look like SQL fragments.")
-
-    cleaned = TargetFilters.model_validate(filters_json).model_dump(exclude_none=True)
-    if cleaned.get("limit", 8) > MAX_TARGET_LIMIT:
-        raise ValueError(f"limit must be <= {MAX_TARGET_LIMIT}")
-    return cleaned
-
-
-def build_targets_query(filters: Dict[str, Any], engine, visibility_sql: Optional[str] = None):
-    metadata = MetaData()
-    celestial = Table("Celestial", metadata, autoload_with=engine)
-    conditions = []
-    ra_min = filters.get("ra_min")
-    ra_max = filters.get("ra_max")
-
-    for field, value in filters.items():
-        if field == "limit":
-            continue
-
-        if field in {"ra_min", "ra_max", "dec_min", "dec_max"}:
-            continue
-
-        column = getattr(celestial.c, field, None)
-        if column is None:
-            raise ValueError(f"Unsupported filter field: {field}")
-
-        if field in {"name", "type", "constellation", "catalogue"}:
-            conditions.append(column.ilike(f"%{value}%"))
-        elif field == "magnitude_min":
-            conditions.append(column >= value)
-        elif field == "magnitude_max":
-            conditions.append(column <= value)
-
-    if ra_min is not None and ra_max is not None and ra_min > ra_max:
-        conditions.append(or_(celestial.c.ra >= ra_min, celestial.c.ra <= ra_max))
-    else:
-        if ra_min is not None:
-            conditions.append(celestial.c.ra >= ra_min)
-        if ra_max is not None:
-            conditions.append(celestial.c.ra <= ra_max)
-
-    if filters.get("dec_min") is not None:
-        conditions.append(celestial.c.dec >= filters["dec_min"])
-    if filters.get("dec_max") is not None:
-        conditions.append(celestial.c.dec <= filters["dec_max"])
-
-    if visibility_sql:
-        visibility_sql = visibility_sql.strip()
-        if not visibility_sql.endswith("= 1") and not visibility_sql.endswith("=1"):
-            visibility_sql = f"({visibility_sql}) = 1"
-        conditions.append(text(visibility_sql))
-
-    stmt = select(celestial).where(*conditions).limit(filters.get("limit", 8))
-    return stmt
 
 
 @tool
@@ -193,6 +85,7 @@ def search_targets(filters_json: dict) -> str:
     try:
         cleaned_filters = validate_target_filters(filters_json)
         query = build_targets_query(cleaned_filters, engine, ACTIVE_VISIBILITY_SQL)
+        print("Query: ", query)
         with engine.connect() as conn:
             rows = conn.execute(query).mappings().all()
         return json.dumps([dict(row) for row in rows])
@@ -223,50 +116,6 @@ schema_brut = db.run("PRAGMA table_info(Celestial);")
 tools = [search_targets]
 tool_node = ToolNode(tools)
 llm_with_tools = llm_pro.bind_tools(tools)
-
-def extract_text_from_content(content: Any) -> str:
-    """Normalize Gemini content payloads into a plain text string."""
-    if content is None:
-        return ""
-
-    if isinstance(content, str):
-        return content
-
-    if isinstance(content, list):
-        chunks: List[str] = []
-        for block in content:
-            if isinstance(block, dict):
-                if "text" in block and isinstance(block["text"], str):
-                    chunks.append(block["text"])
-                elif "value" in block and isinstance(block["value"], str):
-                    chunks.append(block["value"])
-                elif "content" in block and isinstance(block["content"], str):
-                    chunks.append(block["content"])
-            elif isinstance(block, str):
-                chunks.append(block)
-        return "".join(chunks)
-
-    if isinstance(content, dict):
-        for key in ("text", "value", "content"):
-            if isinstance(content.get(key), str):
-                return content[key]
-        return json.dumps(content, ensure_ascii=False)
-
-    return str(content)
-
-
-def print_clean_debug(step_name, message_object):
-    """Affiche le contenu du LLM proprement en virant la signature Google."""
-    content = message_object.content
-    
-    print(f"\n--- DEBUG {step_name} ---")
-    print(f" CONTENU : {extract_text_from_content(content)}")
-    
-    if hasattr(message_object, 'tool_calls') and message_object.tool_calls:
-        for tool in message_object.tool_calls:
-            print(f" APPEL OUTIL : {tool['name']} avec args={tool['args']}")
-
-    print("-" * 30)
 
 def orchestrateur(state = AgentState):
     print("--------- Entrée Orchestrateur ---------")
@@ -313,8 +162,8 @@ def orchestrateur(state = AgentState):
           "\n Mission :", final_mission, "\n Ville :", final_city,
           "\n Heure locale :", target_local, "\n Heure UTC :", observation_time_utc)
     constraint = get_celestial_constraint(latitude, longitude, observation_time_utc)
-    planets = get_visible_solar_system_objects(latitude, longitude, observation_time_utc)
-    print("- Valeur de calcul stockée : \n Erreur_Soleil: ", constraint.get("error"), " \n Planetes visibles : ", [obj['name'] for obj in planets.get("observables")], "\n ----------------------------------------") 
+    solar_system_objects = get_visible_solar_system_objects(latitude, longitude, observation_time_utc)
+    print("- Valeur de calcul stockée : \n Erreur_Soleil: ", constraint.get("error"), " \n Objets du systeme solaire visibles : ", [obj['name'] for obj in solar_system_objects.get("observables")], "\n ----------------------------------------") 
 
     return {"intent": res.intent,
             "detected_city": final_city,
@@ -323,7 +172,7 @@ def orchestrateur(state = AgentState):
             "latitude": latitude,
             "longitude": longitude,
             "sql_where": constraint,
-            "planets": planets,
+            "solar_system_objects": solar_system_objects,
             "timezone" : timezone_name,
             "infos": final_mission,} 
 
@@ -338,7 +187,8 @@ def astronomer(state = AgentState):
         mission=mission_finale,
         sql_where=state.get("sql_where"),
         sun_error=state.get("sql_where", {}).get("error", ""),
-        planets=state.get("planets")
+        deep_sky_available=state.get("sql_where", {}).get("deep_sky_available", True),
+        solar_system_objects=state.get("solar_system_objects")
     ))
     human_instruction = HumanMessage(content=f"Instruction : {mission_finale}")
 
@@ -353,9 +203,11 @@ def astronomer(state = AgentState):
     
     final_message = [system_message, human_instruction] + working_memory
 
+    deep_sky_available = state.get("sql_where", {}).get("deep_sky_available", True)
+    llm = llm_with_tools if deep_sky_available else llm_pro
     set_active_visibility_sql(state.get("sql_where", {}).get("sql_where") or "")
     try:
-        res = llm_with_tools.invoke(final_message)
+        res = llm.invoke(final_message)
     except Exception:
         set_active_visibility_sql("")
         raise
@@ -400,7 +252,7 @@ def vulgarisation(state = AgentState):
         timezone=state.get("timezone") or "UTC",
         observation_time_utc=state.get("observation_time_utc") or "inconnu",
         sun_error=state.get("sql_where", {}).get("error", "aucune contrainte"),
-        planets=state.get("planets") or {"observables": []},
+        solar_system_objects=state.get("solar_system_objects") or {"observables": []},
     )
 
     res = llm_lite.invoke(prompt)

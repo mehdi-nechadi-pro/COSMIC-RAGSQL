@@ -89,6 +89,7 @@ def get_celestial_constraint(lat: float, lon: float, time_utc: datetime | str = 
         return {
             "error": f"The sun is at altitude={sun_altitude}, so no deep sky objects can be seen",
             "sql_where": "",
+            "deep_sky_available": False,
             "lst_hms": lst.to_string(unit=u.hour, sep='hms')
         }
     
@@ -96,14 +97,15 @@ def get_celestial_constraint(lat: float, lon: float, time_utc: datetime | str = 
     return {
     "error": "",
     "sql_where": constraint,
+    "deep_sky_available": True,
     "lst_hms": lst.to_string(unit=u.hour, sep='hms')
 }
 
 def get_visible_solar_system_objects(lat: float, lon: float, time_utc: datetime | str):
     """
     Simplifié : Renvoie un booléen 'is_daytime' et la liste 'observables'.
-    Si il fait jour, la liste ne contient QUE le Soleil/Lune (si levés).
-    Les planètes invisibles sont exclues d'office.
+    Si il fait jour, la liste ne contient que la Lune (si elle est levée).
+    Les objets du système solaire invisibles sont exclus d'office.
     Args: 
     location_lat: location latitude
     location_lon: location longitude 

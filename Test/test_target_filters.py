@@ -68,7 +68,7 @@ def test_astronomer_prompt_formats_json_examples():
         mission="Que voir ce soir ?",
         sql_where={"error": "", "sql_where": ""},
         sun_error="",
-        planets={"observables": []},
+        solar_system_objects={"observables": []},
     )
 
     assert '{"type": "Nebula"' in prompt

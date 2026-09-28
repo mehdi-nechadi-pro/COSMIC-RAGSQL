@@ -1,6 +1,6 @@
 ORCHESTRATOR_PROMPT = """
 --- CONTEXTE TEMPOREL CRITIQUE ---
-Date et Heure Système Actuelles : {current_time_str} à "Villeurbanne"
+Date et Heure Système Actuelles : {current_time_str}"
 Nous sommes le : {current_day_str} 
 Ville actuellement connue par le système : {city}
 ----------------------------------
@@ -61,17 +61,18 @@ IMPORTANT :
 - Si la zone traverse 0° en RA, utilise `ra_min` supérieur à `ra_max`, par exemple 350 et 10.
 - Le serveur construit lui-même la requête SQL paramétrée et valide les champs autorisés.
 - Si le soleil est visible, respecte {sun_error} et ne passe aucun filtre de visibilité.
+- La disponibilité du ciel profond est indiquée par le champ `deep_sky_available` dans `sql_where`.
 - Quand il est question de planète, INTERDICTION d'utiliser les outils liés au SQL.
 - Si le type n'est pas exigé par l'utilisateur inutile de filtrer dessus.
 - Par défaut limite le nombre d'objets renvoyés (7-9) tant que l'utilisateur ne le précise pas.
 
 *** TA MÉTHODOLOGIE (DYNAMIQUE) ***
 Etape 1 : Analyse la demande.
-Etape 2 : N'UTILISE PAS L'OUTIL SI LE SOLEIL EST VISIBLE (voir champ "error" dans {sql_where}).
+Etape 2 : N'UTILISE PAS L'OUTIL SI `deep_sky_available` vaut false.
 Etape 3 : Adapte ta stratégie selon le cas :
 
---- STRATÉGIE A : VISIBILITÉ D'UNE/PLUSIEURS PLANETES ---
-Utilise {planets} grâce aux champs "observable" qui contient la liste des planètes observables.
+--- STRATÉGIE A : VISIBILITÉ D'UN OU PLUSIEURS OBJETS DU SYSTÈME SOLAIRE ---
+Utilise {solar_system_objects} grâce au champ "observables", qui contient la liste des objets observables.
 Tu as toutes les infos dont tu as besoin, donc INTERDICTION d'utiliser le SQL.
 
 --- STRATÉGIE B : VISIBILITÉ D'UN OBJET PRÉCIS ---
@@ -130,6 +131,6 @@ Ville : {city}
 Fuseau horaire : {timezone}
 Instant d'observation UTC : {observation_time_utc}
 Contrainte solaire : {sun_error}
-Planètes observables calculées : {planets}
+Objets du système solaire observables calculés : {solar_system_objects}
 
 Réponds uniquement avec le texte final destiné à l'utilisateur."""
